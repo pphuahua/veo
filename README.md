@@ -1,11 +1,6 @@
 # VEO 主动扫描工具与 SDK 指南
 
-VEO 是一款面向安全测试与攻防演练的主动扫描框架，专注于目录探测、指纹识别和敏感信息发现。项目提供：
-
-- **CLI 工具**：一键执行目录扫描、指纹识别、代理联动等任务。
-- **Go SDK (`veo/pkg/sdk/scan`)**：在程序中嵌入完整的扫描流水线，获得与 CLI 完全一致的结果。
-
-本文档介绍核心参数、配置文件、最佳实践以及 SDK 用法，帮助你快速落地 VEO 的能力。
+VEO 是一款专注于目录探测、指纹识别和敏感信息发现。**欢迎使用任何同类型工具进行准确性和误报对比**。
 
 ---
 ## 1. 快速上手
@@ -18,6 +13,9 @@ VEO 是一款面向安全测试与攻防演练的主动扫描框架，专注于�
 
 # 使用自定义字典、输出 JSON 报告
 ./veo -u http://target.com -w dict/custom.txt --output report.json
+
+# 使用自定义字典、输出 HTML 报告
+./veo -u http://target.com -w dict/custom.txt --output report.html
 
 # 仅指纹识别
 ./veo -m finger -u http://target.com
@@ -97,6 +95,22 @@ addon:
 - `retry`：重试次数
 - `threads`：最大并发数。
 - `max_response_body_size`：响应体限制大小（防止内存占用过大）。
+
+### 2.4 字典配置
+
+```yaml
+ content:
+    files_dict: true
+    common_dict: true
+    api_dict: true
+    common: "dict/common.txt"
+    api: "dict/api.txt"
+    files: "dict/files.txt"
+```
+
+- `files_dict`：文件字典，用来扫描根目录文件泄露，只扫描根目录。
+- `common_dict`：通用字典，每层目录都进行扫描。
+- `api_dict`：api字典，每层目录都进行扫描。
 
 ---
 ## 3. 目录扫描无效页面过滤逻辑

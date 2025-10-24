@@ -188,7 +188,6 @@ addon:
     threads: 200
     randomUA: true
     max_response_body_size: 1048576
-
     user_agents:
       - 
 
