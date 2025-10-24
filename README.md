@@ -5,7 +5,6 @@ VEO 是一款专注于目录探测、指纹识别和敏感信息发现。**欢�
 ![https://youke1.picui.cn/s1/2025/10/24/68fb5aa3b09a6.jpg](https://youke1.picui.cn/s1/2025/10/24/68fb5aa3b09a6.jpg)
 
 ## 1. 快速上手
-
 被动扫描时，首次使用请解压ca-cert.zip安装证书。
 
 ```bash
@@ -124,6 +123,10 @@ addon:
 6. **认证头探测**：对 401/403 响应自动提取认证信息，携带认证扫描，出货率更高。
 7. **指纹识别**：解压 gzip/deflate/brotli，自动识别编码，执行 DSL 规则，输出 `<rule_name>` 与 `<rule_content>`。
 
+---
+
+## 4. 指纹库编写规则和仓库
+https://github.com/Nuclei-Template-Hub/VEO-Fingerprint
 ---
 ## 4. SDK 使用
 
