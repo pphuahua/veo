@@ -8,20 +8,28 @@ VEO 是一款面向安全测试与攻防演练的主动扫描框架，专注于�
 本文档介绍核心参数、配置文件、最佳实践以及 SDK 用法，帮助你快速落地 VEO 的能力。
 
 ---
-## 1. CLI 快速上手
+## 1. 快速上手
+
+被动扫描时，首次使用请解压ca-cert.zip安装证书。
 
 ```bash
-# 目录扫描 + 指纹识别（默认配置）
+# 目录扫描 + 指纹识别（默认配置，使用内置字典）
 ./veo -u http://target.com
 
 # 使用自定义字典、输出 JSON 报告
-./veo -u http://target.com -w dict/custom.txt --json-report report.json
+./veo -u http://target.com -w dict/custom.txt --output report.json
 
 # 仅指纹识别
-./veo --finger -u http://target.com
+./veo -m finger -u http://target.com
+
+# 仅目录扫描
+./veo -m dirscan -u http://target.com
+
+# 被动扫描（默认监听端口9080）
+./veo -u http://target.com --listen
 ```
 
-### 常用参数
+### 详细参数
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
@@ -29,10 +37,9 @@ VEO 是一款面向安全测试与攻防演练的主动扫描框架，专注于�
 | `-w` | 自定义目录字典 | `-w dict/custom.txt` |
 | `--stats` | 实时输出进度统计 | `--stats` |
 | `--debug` | 打开调试日志 | `--debug` |
-| `--finger` | 仅执行指纹识别 | `--finger -u http://target.com` |
-| `--json-report` | 导出 JSON 报告 | `--json-report report.json` |
+| `--json-report` | 导出 HTML 报告          | `--output report.html`         |
 
-> 完整参数请查看 `./veo --help`。
+> 完整参数请查看 `./veo -h
 
 ---
 ## 2. 配置文件说明
@@ -42,12 +49,12 @@ VEO 是一款面向安全测试与攻防演练的主动扫描框架，专注于�
 ### 2.1 服务器与主机过滤
 ```yaml
 server:
-  listen: ":9080"
+  listen: ":9080" # 被动扫描时，监听的端口
 
 hosts:
-  allow:
+  allow:  # 被动扫描时默认允许的主机
     - "*"
-  reject:
+  reject: # 被动扫描时默认拒绝的主机
     - "*.baidu.com"
     - "*.google.*"
 ```
@@ -62,10 +69,10 @@ addon:
       path: ["/css/", "/js/"]
       extensions: [".css", ".js", ".png", ...]
 ```
-- `GenerationStatusCodes`：被动收集时保留的状态码。
-- `static.path` / `static.extensions`：过滤静态资源，减少噪声。
+- `GenerationStatusCodes` ：被动扫描时，仅采集符合状态码的URL
+- `path`：过滤静态目录
+- `extensions`：过滤静态文件
 
-### 2.3 过滤与哈希阈值
 ```yaml
 addon:
   filter:
@@ -73,6 +80,7 @@ addon:
     ValidStatusCodes: [200, 401, 403, 405, 302, 301, 500]
     filter_tolerance: 50
 ```
+- `ValidStatusCodes`：目录扫描过滤的状态码
 - `filter_tolerance`：相似页面容错字节数（默认 50 字节）。
 - 支持开启/关闭主要哈希、二次哈希过滤。
 
@@ -86,18 +94,19 @@ addon:
     max_response_body_size: 1048576
 ```
 - `timeout`：单请求超时时间（秒）。
+- `retry`：重试次数
 - `threads`：最大并发数。
-- `max_response_body_size`：响应体截断大小（防止内存占用过大）。
+- `max_response_body_size`：响应体限制大小（防止内存占用过大）。
 
 ---
-## 3. 过滤细节回顾
+## 3. 目录扫描无效页面过滤逻辑
 
 1. **状态码过滤**：默认白名单 `200/301/302/401/403/405/500`，可覆写。
 2. **静态资源过滤**：根据 Content-Type / 扩展名排除图片、视频等页面。
 3. **主要哈希过滤**：剔除重复或异常页面，默认阈值 3。
 4. **二次哈希过滤**：对相似页面进行去重，默认阈值 1。
 5. **相似页面容错**：默认 50 字节，可通过配置文件或 SDK 参数调整。
-6. **认证头探测**：对 401/403 响应自动提取认证信息，帮助定位登录入口。
+6. **认证头探测**：对 401/403 响应自动提取认证信息，携带认证扫描，出货率更高。
 7. **指纹识别**：解压 gzip/deflate/brotli，自动识别编码，执行 DSL 规则，输出 `<rule_name>` 与 `<rule_content>`。
 
 ---
@@ -172,27 +181,6 @@ func main() {
 辅助函数 `scan.Bool` / `scan.Int` / `scan.Int64` 用于快速传入指针参数。
 
 ---
-## 5. 最佳实践
-
-1. **资产盘点联动**：将实时资产清单导入 `DirTargets`，即可批量探测新增路径或泄露接口。
-2. **敏感信息识别**：通过添加 DSL，如 `<contains(body, 'ACCESSKEY')>`，快速定位潜在 Key 泄漏。
-3. **同源多目标扫描**：将认证成功后的 Cookie 通过 CLI/SDK 注入，探索管理员后台、调试接口等敏感路径。
-4. **报告联动**：JSON 结果中包含细粒度的 `fingerprints` 与 `summary`，便于接入后续风控/告警平台。
-5. **定制字典**：结合业务常见目录（`/upload/`, `/auth/`, `/api/v1/`），提升扫描命中率。
-
----
-## 6. 常见问题
-
-| 问题 | 可能原因 |
-|------|----------|
-| 指纹结果少 | 静态资源过滤过严，或响应被压缩/编码转换失败（检查 ResponseBody&Content-Encoding） |
-| 目录结果为空 | 目标全部被过滤；调高 `FilterTolerance` 或修改状态码白名单 |
-| TLS 报错 | 裸 IP 且未启用 `AutoSkipTLSForIP`；手动设置 `SkipTLSVerify=true` |
-| 401/403 忽略认证提示 | 确保未覆盖默认的 `RequestProcessor`，或手动传入自定义头后启用认证探测 |
-
----
 ## 7. 结语
 
-得益于与 CLI 完全一致的实现，VEO SDK 可以保证目录扫描与指纹识别结果高度可靠。无论是构建自动化安全扫描平台，还是在红队工具链中集成，都可以快速落地并保持一致性。
-
-欢迎提交 Issue/PR，一起共建更完善的扫描能力！
+欢迎提交 Issue/PR。
