@@ -168,8 +168,8 @@ func main() {
     autoSkip := true
 
     cfg := &scan.Config{
-        DirTargets:         []string{"http://221.214.214.36/"},
-        FingerprintTargets: []string{"http://221.214.214.36/"},
+        DirTargets:         []string{"http://x.x.x.x/"},
+        FingerprintTargets: []string{"http://x.x.x.x/"},
         SkipTLSVerify:      false,
         AutoSkipTLSForIP:   &autoSkip,
         HTTPTimeout:        20 * time.Second,
