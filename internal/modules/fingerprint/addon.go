@@ -1,11 +1,6 @@
 package fingerprint
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/logger"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/shared"
-	"veo/proxy"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -14,6 +9,11 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"veo/internal/core/config"
+	"veo/internal/core/logger"
+	"veo/internal/utils/filter"
+	"veo/internal/utils/shared"
+	"veo/proxy"
 
 	"github.com/andybalholm/brotli"
 )
@@ -507,16 +507,16 @@ func (fa *FingerprintAddon) applyCustomHeaders(f *proxy.Flow) {
 			f.Request.Header.Set(key, value)
 		}
 
-		logger.Debugf("[fingerprint.addon] 应用了 %d 个自定义HTTP头部: %s", len(customHeaders), f.Request.URL.String())
+		logger.Debugf("应用了 %d 个自定义HTTP头部: %s", len(customHeaders), f.Request.URL.String())
 
 		// 记录应用的头部（调试用）
 		for key, value := range customHeaders {
 			// 对敏感信息进行遮蔽显示
 			maskedValue := fa.maskSensitiveValue(value)
-			logger.Debugf("[fingerprint.addon] 自定义头部: %s = %s", key, maskedValue)
+			logger.Debugf("自定义头部: %s = %s", key, maskedValue)
 		}
 	} else {
-		logger.Debugf("[fingerprint.addon] 未发现自定义HTTP头部: %s", f.Request.URL.String())
+		logger.Debugf("未发现自定义HTTP头部: %s", f.Request.URL.String())
 	}
 }
 

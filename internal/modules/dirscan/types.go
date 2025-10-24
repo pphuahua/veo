@@ -1,10 +1,11 @@
 package dirscan
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
 	"sync"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/interfaces"
+	"veo/internal/utils/filter"
 )
 
 // ===========================================
@@ -52,6 +53,7 @@ type Engine struct {
 	stats          *Statistics
 	mu             sync.RWMutex
 	lastScanResult *ScanResult
+	filterConfig   *filter.FilterConfig
 }
 
 // ScanStatus 扫描状态

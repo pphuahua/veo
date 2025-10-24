@@ -1,17 +1,16 @@
 package dirscan
 
 import (
+	"fmt"
+	"sync/atomic"
+	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	report "veo/internal/modules/reporter"
-	"veo/internal/utils/collector"
 	"veo/internal/utils/filter"
 	"veo/internal/utils/generator"
 	requests "veo/internal/utils/processor"
-	"fmt"
-	"sync/atomic"
-	"time"
 )
 
 // ===========================================
@@ -33,6 +32,22 @@ func NewEngine(config *EngineConfig) *Engine {
 
 	logger.Debug("目录扫描引擎初始化完成")
 	return engine
+}
+
+// SetFilterConfig 设置自定义过滤器配置（SDK可用）
+func (e *Engine) SetFilterConfig(cfg *filter.FilterConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.filterConfig = filter.CloneFilterConfig(cfg)
+}
+
+func (e *Engine) getFilterConfig() *filter.FilterConfig {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.filterConfig == nil {
+		return nil
+	}
+	return filter.CloneFilterConfig(e.filterConfig)
 }
 
 // GetStats 获取统计信息
@@ -66,11 +81,11 @@ func (e *Engine) ClearResults() {
 
 	e.lastScanResult = nil
 
-	logger.Debug("[dirscan.engine] 扫描结果已清空")
+	logger.Debug("扫描结果已清空")
 }
 
 // PerformScan 执行扫描
-func (e *Engine) PerformScan(collectorInstance *collector.Collector) (*ScanResult, error) {
+func (e *Engine) PerformScan(collectorInstance interfaces.URLCollectorInterface) (*ScanResult, error) {
 	startTime := time.Now()
 	// 1. 检查收集的URL
 	urlCount := collectorInstance.GetURLCount()
@@ -157,7 +172,7 @@ func (e *Engine) PerformScan(collectorInstance *collector.Collector) (*ScanResul
 }
 
 // generateScanURLs 生成扫描URL
-func (e *Engine) generateScanURLs(collectorInstance *collector.Collector) ([]string, error) {
+func (e *Engine) generateScanURLs(collectorInstance interfaces.URLCollectorInterface) ([]string, error) {
 	logger.Debug("开始生成扫描URL")
 
 	// 创建内容管理器（使用utils包中的实现）
@@ -173,7 +188,7 @@ func (e *Engine) generateScanURLs(collectorInstance *collector.Collector) ([]str
 
 // performHTTPRequests 执行HTTP请求
 func (e *Engine) performHTTPRequests(scanURLs []string) ([]*interfaces.HTTPResponse, error) {
-	logger.Debug("[dirscan.engine] 开始执行HTTP扫描")
+	logger.Debug("开始执行HTTP扫描")
 
 	// 获取或创建请求处理器（简化后的逻辑）
 	processor := e.getOrCreateRequestProcessor()
@@ -188,13 +203,13 @@ func (e *Engine) performHTTPRequests(scanURLs []string) ([]*interfaces.HTTPRespo
 
 // getOrCreateRequestProcessor 获取或创建请求处理器
 func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
-	logger.Debug("[dirscan.engine] 创建新的请求处理器")
+	logger.Debug("创建新的请求处理器")
 
 	// 创建新的请求处理器实例
 	processor := requests.NewRequestProcessor(nil)
 
 	// 应用CLI指定的自定义HTTP头部
-	logger.Debug("[dirscan.engine] 准备应用自定义HTTP头部")
+	logger.Debug("准备应用自定义HTTP头部")
 	e.applyCustomHeadersToProcessor(processor)
 
 	return processor
@@ -207,14 +222,14 @@ func (e *Engine) applyCustomHeadersToProcessor(processor *requests.RequestProces
 
 	if len(customHeaders) > 0 {
 		processor.SetCustomHeaders(customHeaders)
-		logger.Debugf("[dirscan.engine] 应用了 %d 个自定义HTTP头部到请求处理器", len(customHeaders))
+		logger.Debugf("应用了 %d 个自定义HTTP头部到请求处理器", len(customHeaders))
 
 		// 记录应用的头部（调试用）
 		for key, value := range customHeaders {
-			logger.Debugf("[dirscan.engine] 自定义头部: %s = %s", key, value)
+			logger.Debugf("自定义头部: %s = %s", key, value)
 		}
 	} else {
-		logger.Debug("[dirscan.engine] 未发现自定义HTTP头部，启用自动认证检测")
+		logger.Debug("未发现自定义HTTP头部，启用自动认证检测")
 	}
 }
 
@@ -232,10 +247,14 @@ func (e *Engine) getActualConcurrency() int {
 
 // applyFilter 应用过滤器
 func (e *Engine) applyFilter(responses []*interfaces.HTTPResponse) (*interfaces.FilterResult, error) {
-	logger.Debug("[dirscan.engine] 开始应用响应过滤器")
+	logger.Debug("开始应用响应过滤器")
 
-	// 创建响应过滤器（二次指纹识别已在filter内部实现）
-	responseFilter := filter.CreateResponseFilterFromExternal()
+	var responseFilter *filter.ResponseFilter
+	if cfg := e.getFilterConfig(); cfg != nil {
+		responseFilter = filter.NewResponseFilter(cfg)
+	} else {
+		responseFilter = filter.CreateResponseFilterFromExternal()
+	}
 
 	// 转换为过滤器可处理的格式
 	filterResponses := e.convertToFilterResponses(responses)

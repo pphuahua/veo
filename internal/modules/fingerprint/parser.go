@@ -1,11 +1,11 @@
 package fingerprint
 
 import (
-	"veo/internal/core/logger"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"veo/internal/core/logger"
 )
 
 // ===========================================
@@ -228,7 +228,7 @@ func (p *DSLParser) evaluateIcon(dsl string, ctx *DSLContext) (bool, bool) {
 
 			// 检查是否有HTTP客户端、基础URL和Engine实例（主动探测必需）
 			if ctx.HTTPClient == nil || ctx.BaseURL == "" || ctx.Engine == nil {
-				logger.Debugf("[dsl.parser] icon()函数缺少必要组件，跳过主动探测")
+				logger.Debugf("icon()函数缺少必要组件，跳过主动探测")
 				return false, false
 			}
 
@@ -238,13 +238,13 @@ func (p *DSLParser) evaluateIcon(dsl string, ctx *DSLContext) (bool, bool) {
 			// 使用Engine的缓存机制获取图标哈希值
 			actualHash, err := ctx.Engine.getIconHash(iconURL, ctx.HTTPClient)
 			if err != nil {
-				logger.Debugf("[dsl.parser] 获取图标失败: %s, 错误: %v", iconURL, err)
+				logger.Debugf("获取图标失败: %s, 错误: %v", iconURL, err)
 				return false, false
 			}
 
 			// 比较哈希值
 			match := actualHash == expectedHash
-			logger.Debugf("[dsl.parser] icon()匹配: %s -> %v", iconURL, match)
+			logger.Debugf("icon()匹配: %s -> %v", iconURL, match)
 			return match, true
 		}
 	}

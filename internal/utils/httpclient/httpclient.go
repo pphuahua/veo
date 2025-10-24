@@ -1,14 +1,14 @@
 package httpclient
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/logger"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/logger"
 )
 
 // ===========================================
@@ -103,7 +103,7 @@ func New(config *Config) *Client {
 			if len(via) >= config.MaxRedirects {
 				return fmt.Errorf("超过最大重定向次数: %d", config.MaxRedirects)
 			}
-			logger.Debugf("[httpclient] 跟随重定向: %s -> %s", via[len(via)-1].URL.String(), req.URL.String())
+			logger.Debugf("跟随重定向: %s -> %s", via[len(via)-1].URL.String(), req.URL.String())
 			return nil
 		}
 	} else {
@@ -122,7 +122,7 @@ func New(config *Config) *Client {
 
 // MakeRequest 实现HTTPClientInterface接口，支持TLS和重定向
 func (c *Client) MakeRequest(rawURL string) (body string, statusCode int, err error) {
-	logger.Debugf("[httpclient] 发起请求: %s (跟随重定向: %v)", rawURL, c.followRedirect)
+	logger.Debugf("发起请求: %s (跟随重定向: %v)", rawURL, c.followRedirect)
 
 	// 创建请求
 	req, err := http.NewRequest("GET", rawURL, nil)
@@ -142,7 +142,7 @@ func (c *Client) MakeRequest(rawURL string) (body string, statusCode int, err er
 
 	// 处理重定向响应
 	if c.isRedirectResponse(resp.StatusCode) && !c.followRedirect {
-		logger.Debugf("[httpclient] 检测到重定向响应 %d，但未启用跟随: %s", resp.StatusCode, rawURL)
+		logger.Debugf("检测到重定向响应 %d，但未启用跟随: %s", resp.StatusCode, rawURL)
 	}
 
 	// 读取响应体
@@ -151,7 +151,7 @@ func (c *Client) MakeRequest(rawURL string) (body string, statusCode int, err er
 		return "", resp.StatusCode, fmt.Errorf("读取响应体失败: %v", err)
 	}
 
-	logger.Debugf("[httpclient] 请求完成: %s [%d] 响应体: %d bytes", rawURL, resp.StatusCode, len(respBody))
+	logger.Debugf("请求完成: %s [%d] 响应体: %d bytes", rawURL, resp.StatusCode, len(respBody))
 	return string(respBody), resp.StatusCode, nil
 }
 
@@ -186,16 +186,16 @@ func (c *Client) applyCustomHeaders(req *http.Request) {
 			req.Header.Set(key, value)
 		}
 
-		logger.Debugf("[httpclient] 应用了 %d 个自定义HTTP头部: %s", len(customHeaders), req.URL.String())
+		logger.Debugf("应用了 %d 个自定义HTTP头部: %s", len(customHeaders), req.URL.String())
 
 		// 记录应用的头部（调试用）
 		for key, value := range customHeaders {
 			// 对敏感信息进行遮蔽显示
 			maskedValue := c.maskSensitiveValue(value)
-			logger.Debugf("[httpclient] 自定义头部: %s = %s", key, maskedValue)
+			logger.Debugf("自定义头部: %s = %s", key, maskedValue)
 		}
 	} else {
-		logger.Debugf("[httpclient] 未发现自定义HTTP头部: %s", req.URL.String())
+		logger.Debugf("未发现自定义HTTP头部: %s", req.URL.String())
 	}
 }
 

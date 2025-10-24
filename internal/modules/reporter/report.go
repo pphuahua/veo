@@ -3,9 +3,6 @@ package report
 // report包用于生成扫描报告
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
 	"fmt"
 	"html/template"
 	"os"
@@ -13,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/interfaces"
+	"veo/internal/core/logger"
 )
 
 // ===========================================
@@ -157,7 +157,7 @@ func (wrg *WebReportGenerator) GenerateReport(filterResult *interfaces.FilterRes
 
 // prepareReportData 准备报告数据
 func (wrg *WebReportGenerator) prepareReportData(filterResult *interfaces.FilterResult, target string) (*ReportData, error) {
-	logger.Debug("[report.go] 准备报告数据")
+	logger.Debug("准备报告数据")
 
 	if filterResult == nil {
 		return nil, fmt.Errorf("过滤结果为空")
@@ -195,7 +195,7 @@ func (wrg *WebReportGenerator) prepareReportData(filterResult *interfaces.Filter
 		FilterResult:   filterResult,
 	}
 
-	logger.Debug(fmt.Sprintf("[report.go] 报告数据准备完成 - 总数: %d, 成功: %d, 重定向: %d, 认证: %d, 禁止: %d, 错误: %d",
+	logger.Debug(fmt.Sprintf("报告数据准备完成 - 总数: %d, 成功: %d, 重定向: %d, 认证: %d, 禁止: %d, 错误: %d",
 		len(results), successCount, redirectCount, authCount, forbiddenCount, errorCount))
 
 	return reportData, nil
@@ -263,7 +263,7 @@ func (wrg *WebReportGenerator) sortResults(results []interfaces.HTTPResponse) {
 
 // generateHTML 生成HTML内容
 func (wrg *WebReportGenerator) generateHTML(data *ReportData) (string, error) {
-	logger.Debug("[report.go] 生成HTML模板内容")
+	logger.Debug("生成HTML模板内容")
 
 	// 创建模板函数
 	funcMap := template.FuncMap{
@@ -290,7 +290,7 @@ func (wrg *WebReportGenerator) generateHTML(data *ReportData) (string, error) {
 
 // saveReport 保存报告文件
 func (wrg *WebReportGenerator) saveReport(htmlContent string, target string) (string, error) {
-	logger.Debug("[report.go] 保存HTML报告文件")
+	logger.Debug("保存HTML报告文件")
 
 	// 确保输出目录存在
 	if err := os.MkdirAll(wrg.config.OutputDir, 0755); err != nil {
@@ -322,7 +322,7 @@ func (wrg *WebReportGenerator) saveReport(htmlContent string, target string) (st
 	// 获取绝对路径
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		logger.Warn("[report.go] 获取绝对路径失败，使用相对路径: ", err)
+		logger.Warn("获取绝对路径失败，使用相对路径: ", err)
 		return filePath, nil
 	}
 

@@ -1,15 +1,15 @@
 package scheduler
 
 import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	"veo/internal/utils/generator"
 	processor "veo/internal/utils/processor"
-	"context"
-	"fmt"
-	"sync"
-	"time"
 )
 
 // TargetScheduler 目标调度器（[重要] 多目标并发优化）
@@ -64,7 +64,7 @@ func NewTargetScheduler(targets []string, cfg *config.Config) *TargetScheduler {
 // SetBaseRequestProcessor 设置基础请求处理器（支持统计更新）
 func (ts *TargetScheduler) SetBaseRequestProcessor(processor *processor.RequestProcessor) {
 	ts.baseRequestProcessor = processor
-	logger.Debug("[scheduler] 设置基础请求处理器，支持统计更新")
+	logger.Debug("设置基础请求处理器，支持统计更新")
 }
 
 // ExecuteConcurrentScan 执行并发扫描（修复：添加超时和取消机制）
@@ -184,7 +184,7 @@ func (ts *TargetScheduler) processTargetWithTimeout(ctx context.Context, index i
 		statsUpdater := ts.baseRequestProcessor.GetStatsUpdater()
 		if statsUpdater != nil {
 			statsUpdater.IncrementCompletedHosts()
-			logger.Debugf("[scheduler] 目标 %s 完成，更新已完成主机数", target)
+			logger.Debugf("目标 %s 完成，更新已完成主机数", target)
 		}
 	}
 
@@ -264,9 +264,9 @@ func (ts *TargetScheduler) createTargetWorker(id int, target string) *TargetWork
 		// 获取基础请求处理器的统计更新器并设置到新处理器
 		// 注意：这里需要添加一个方法来获取统计更新器
 		ts.copyStatsUpdater(ts.baseRequestProcessor, requestProcessor)
-		logger.Debugf("[scheduler] 创建请求处理器并复制统计更新器: target-%s", extractDomainFromURL(target))
+		logger.Debugf("创建请求处理器并复制统计更新器: target-%s", extractDomainFromURL(target))
 	} else {
-		logger.Debugf("[scheduler] 创建新的请求处理器（不支持统计更新）: target-%s", extractDomainFromURL(target))
+		logger.Debugf("创建新的请求处理器（不支持统计更新）: target-%s", extractDomainFromURL(target))
 	}
 
 	// 设置目标上下文
@@ -290,9 +290,9 @@ func (ts *TargetScheduler) copyStatsUpdater(source, target *processor.RequestPro
 		target.SetStatsUpdater(statsUpdater)
 		// 设置批量扫描模式
 		target.SetBatchMode(true)
-		logger.Debug("[scheduler] 成功复制统计更新器并设置批量模式")
+		logger.Debug("成功复制统计更新器并设置批量模式")
 	} else {
-		logger.Debug("[scheduler] 源处理器没有统计更新器")
+		logger.Debug("源处理器没有统计更新器")
 	}
 }
 

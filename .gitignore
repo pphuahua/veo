@@ -7,3 +7,9 @@ advent_darwin_arm64 11.07.25
 /tools
 test 11.07.25.txt
 url 11.07.25.txt
+/.cursor
+/.augment
+/rules
+/reports
+AGENTS.md
+test

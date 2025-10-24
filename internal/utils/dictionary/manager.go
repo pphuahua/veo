@@ -1,13 +1,13 @@
 package dictionary
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/logger"
 	"bufio"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"veo/internal/core/config"
+	"veo/internal/core/logger"
 )
 
 // DictionaryManager 字典管理器，专门负责字典的加载和管理
@@ -206,7 +206,7 @@ func (dm *DictionaryManager) IsLoaded() bool {
 func (dm *DictionaryManager) ensureLoaded() {
 	if !dm.IsLoaded() {
 		if err := dm.LoadDictionaries(); err != nil {
-			logger.Warnf("[dictionary] 延迟加载字典失败: %v", err)
+			logger.Warnf("延迟加载字典失败: %v", err)
 		}
 	}
 }
@@ -303,5 +303,5 @@ func (dm *DictionaryManager) Reset() {
 	dm.filesDict = make([]string, 0)
 	dm.loaded = false
 
-	logger.Debug("[dictionary] 字典管理器已重置")
+	logger.Debug("字典管理器已重置")
 }

@@ -1,11 +1,6 @@
 package filter
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
-	"veo/internal/utils/filter/strategy"
-	"veo/internal/utils/formatter"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -14,6 +9,12 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"veo/internal/core/config"
+	"veo/internal/core/interfaces"
+	"veo/internal/core/logger"
+	"veo/internal/utils/filter/strategy"
+	"veo/internal/utils/formatter"
 
 	"github.com/andybalholm/brotli"
 )
@@ -62,6 +63,41 @@ func DefaultFilterConfig() *FilterConfig {
 		// 相似页面过滤容错阈值默认配置
 		FilterTolerance: 50, // 默认50字节容错
 	}
+}
+
+// CloneFilterConfig 创建过滤器配置的深拷贝
+func CloneFilterConfig(cfg *FilterConfig) *FilterConfig {
+	if cfg == nil {
+		return nil
+	}
+
+	clone := *cfg
+	if cfg.ValidStatusCodes != nil {
+		clone.ValidStatusCodes = append([]int(nil), cfg.ValidStatusCodes...)
+	}
+	if cfg.FilteredContentTypes != nil {
+		clone.FilteredContentTypes = append([]string(nil), cfg.FilteredContentTypes...)
+	}
+
+	return &clone
+}
+
+// SetGlobalFilterConfig 设置全局默认过滤配置（SDK可用）
+func SetGlobalFilterConfig(cfg *FilterConfig) {
+	if cfg == nil {
+		globalFilterConfig.Store((*FilterConfig)(nil))
+		return
+	}
+	globalFilterConfig.Store(CloneFilterConfig(cfg))
+}
+
+func getGlobalFilterConfig() *FilterConfig {
+	if value := globalFilterConfig.Load(); value != nil {
+		if cfg, ok := value.(*FilterConfig); ok {
+			return CloneFilterConfig(cfg)
+		}
+	}
+	return nil
 }
 
 // ResponseFilter 响应过滤器（重构版，使用策略模式）
@@ -380,6 +416,9 @@ func (ca *ConfigAdapter) ToExternalConfig(internalConfig *FilterConfig) map[stri
 
 // CreateFilterConfigFromExternal 便捷方法：从外部配置创建过滤器配置
 func CreateFilterConfigFromExternal() *FilterConfig {
+	if cfg := getGlobalFilterConfig(); cfg != nil {
+		return cfg
+	}
 	adapter := NewConfigAdapter()
 	return adapter.FromExternalConfig()
 }
@@ -399,6 +438,19 @@ func IsContentTypeFiltered(contentType string) bool {
 
 	// 执行Content-Type检查逻辑
 	return checkContentTypeAgainstRules(contentType, config.FilteredContentTypes)
+}
+
+// IsContentTypeFilteredWithConfig 使用指定配置检测Content-Type是否应该过滤
+func IsContentTypeFilteredWithConfig(contentType string, cfg *FilterConfig) bool {
+	if cfg == nil {
+		return IsContentTypeFiltered(contentType)
+	}
+
+	if !cfg.EnableContentTypeFilter {
+		return false
+	}
+
+	return checkContentTypeAgainstRules(contentType, cfg.FilteredContentTypes)
 }
 
 // checkContentTypeAgainstRules 检查Content-Type是否匹配过滤规则
@@ -478,6 +530,8 @@ func (rf *ResponseFilter) PrintFilterResult(result *interfaces.FilterResult) {
 		rf.printSecondaryFilterStatistics(result.SecondaryHashResults)
 	}
 }
+
+var globalFilterConfig atomic.Value
 
 // formatNumber 格式化数字显示（加粗）
 func formatNumber(num int) string {
@@ -571,7 +625,7 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	rf.mu.RUnlock()
 
 	if engine == nil {
-		logger.Debugf("[二次指纹] 指纹引擎为nil，跳过识别")
+		logger.Debugf("指纹引擎为nil，跳过识别")
 		return ""
 	}
 
@@ -581,18 +635,18 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	// 检查是否有 AnalyzeResponseWithClientSilent 方法
 	method := engineValue.MethodByName("AnalyzeResponseWithClientSilent")
 	if !method.IsValid() {
-		logger.Debugf("[二次指纹] 指纹引擎没有 AnalyzeResponseWithClientSilent 方法")
+		logger.Debugf("指纹引擎没有 AnalyzeResponseWithClientSilent 方法")
 		return ""
 	}
 
 	// 转换响应格式
 	fpResponse := rf.convertToFingerprintResponse(page)
 	if fpResponse == nil {
-		logger.Debugf("[二次指纹] 响应转换失败: %s", page.URL)
+		logger.Debugf("响应转换失败: %s", page.URL)
 		return ""
 	}
 
-	logger.Debugf("[二次指纹] 开始识别: %s", page.URL)
+	logger.Debugf("开始识别: %s", page.URL)
 
 	// 使用反射调用方法
 	// 第二个参数是 httpClient，传递 nil
@@ -605,7 +659,7 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 
 	// 检查返回值
 	if len(results) == 0 {
-		logger.Debugf("[二次指纹] 方法调用无返回值")
+		logger.Debugf("方法调用无返回值")
 		return ""
 	}
 
@@ -614,11 +668,11 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	// 使用反射获取切片长度
 	matchesValue := reflect.ValueOf(matchesInterface)
 	if matchesValue.Kind() != reflect.Slice {
-		logger.Debugf("[二次指纹] 返回值不是切片类型: %v", matchesValue.Kind())
+		logger.Debugf("返回值不是切片类型: %v", matchesValue.Kind())
 		return ""
 	}
 
-	logger.Debugf("[二次指纹] 识别完成: %s, 匹配数量: %d", page.URL, matchesValue.Len())
+	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, matchesValue.Len())
 
 	// 格式化指纹信息
 	return rf.formatFingerprintMatches(matchesInterface)
@@ -645,7 +699,7 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 	if len(bodyPreview) > 100 {
 		bodyPreview = bodyPreview[:100]
 	}
-	logger.Debugf("[二次指纹] 转换响应: %s, 原始长度: %d, 解压后长度: %d, 前100字符: %s",
+	logger.Debugf("转换响应: %s, 原始长度: %d, 解压后长度: %d, 前100字符: %s",
 		resp.URL, len(body), len(decompressedBody), bodyPreview)
 
 	// 使用反射获取指纹引擎的类型
@@ -664,13 +718,13 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 	// 查找 AnalyzeResponseWithClientSilent 方法
 	method, found := engineType.MethodByName("AnalyzeResponseWithClientSilent")
 	if !found {
-		logger.Debugf("[二次指纹] 未找到 AnalyzeResponseWithClientSilent 方法")
+		logger.Debugf("未找到 AnalyzeResponseWithClientSilent 方法")
 		return nil
 	}
 
 	// 获取第一个参数的类型（应该是 *fingerprint.HTTPResponse）
 	if method.Type.NumIn() < 2 { // 第0个是receiver
-		logger.Debugf("[二次指纹] 方法参数数量不足")
+		logger.Debugf("方法参数数量不足")
 		return nil
 	}
 
@@ -715,7 +769,7 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 		field.SetString(resp.Title)
 	}
 
-	logger.Debugf("[二次指纹] 成功创建类型: %v", newResp.Type())
+	logger.Debugf("成功创建类型: %v", newResp.Type())
 	return newResp.Interface()
 }
 
@@ -728,7 +782,7 @@ func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{})
 	// 使用反射处理切片
 	matchesValue := reflect.ValueOf(matchesInterface)
 	if matchesValue.Kind() != reflect.Slice {
-		logger.Debugf("[二次指纹] 匹配结果不是切片类型")
+		logger.Debugf("匹配结果不是切片类型")
 		return ""
 	}
 
@@ -737,7 +791,7 @@ func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{})
 		return ""
 	}
 
-	logger.Debugf("[二次指纹] 格式化 %d 个匹配结果", matchCount)
+	logger.Debugf("格式化 %d 个匹配结果", matchCount)
 
 	var parts []string
 	for i := 0; i < matchCount; i++ {
@@ -753,7 +807,7 @@ func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{})
 		dslMatchedField := match.FieldByName("DSLMatched")
 
 		if !ruleNameField.IsValid() || !dslMatchedField.IsValid() {
-			logger.Debugf("[二次指纹] 无法读取字段: RuleName或DSLMatched")
+			logger.Debugf("无法读取字段: RuleName或DSLMatched")
 			continue
 		}
 
@@ -764,12 +818,12 @@ func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{})
 			parts = append(parts, fmt.Sprintf("<%s> <%s>",
 				formatter.FormatFingerprint(ruleName),
 				formatter.FormatDSL(dslMatched)))
-			logger.Debugf("[二次指纹] 匹配: %s - %s", ruleName, dslMatched)
+			logger.Debugf("匹配: %s - %s", ruleName, dslMatched)
 		}
 	}
 
 	result := strings.Join(parts, " ")
-	logger.Debugf("[二次指纹] 格式化结果: %s", result)
+	logger.Debugf("格式化结果: %s", result)
 	return result
 }
 
@@ -822,7 +876,7 @@ func (rf *ResponseFilter) decompressResponseBody(body string, headers map[string
 		return body
 	}
 
-	logger.Debugf("[二次指纹] 检测到压缩编码: %s", contentEncoding)
+	logger.Debugf("检测到压缩编码: %s", contentEncoding)
 
 	bodyBytes := []byte(body)
 
@@ -836,7 +890,7 @@ func (rf *ResponseFilter) decompressResponseBody(body string, headers map[string
 	}
 
 	// 不支持的压缩格式，返回原始内容
-	logger.Debugf("[二次指纹] 不支持的压缩格式: %s", contentEncoding)
+	logger.Debugf("不支持的压缩格式: %s", contentEncoding)
 	return body
 }
 
@@ -845,18 +899,18 @@ func (rf *ResponseFilter) decompressGzip(compressedBody []byte) string {
 	reader := bytes.NewReader(compressedBody)
 	gzipReader, err := gzip.NewReader(reader)
 	if err != nil {
-		logger.Debugf("[二次指纹] gzip解压失败: %v, 返回原始内容", err)
+		logger.Debugf("gzip解压失败: %v, 返回原始内容", err)
 		return string(compressedBody)
 	}
 	defer gzipReader.Close()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
-		logger.Debugf("[二次指纹] gzip读取失败: %v, 返回原始内容", err)
+		logger.Debugf("gzip读取失败: %v, 返回原始内容", err)
 		return string(compressedBody)
 	}
 
-	logger.Debugf("[二次指纹] gzip解压成功: %d bytes -> %d bytes",
+	logger.Debugf("gzip解压成功: %d bytes -> %d bytes",
 		len(compressedBody), len(decompressed))
 
 	return string(decompressed)
@@ -870,11 +924,11 @@ func (rf *ResponseFilter) decompressDeflate(compressedBody []byte) string {
 
 	decompressed, err := io.ReadAll(deflateReader)
 	if err != nil {
-		logger.Debugf("[二次指纹] deflate读取失败: %v, 返回原始内容", err)
+		logger.Debugf("deflate读取失败: %v, 返回原始内容", err)
 		return string(compressedBody)
 	}
 
-	logger.Debugf("[二次指纹] deflate解压成功: %d bytes -> %d bytes",
+	logger.Debugf("deflate解压成功: %d bytes -> %d bytes",
 		len(compressedBody), len(decompressed))
 
 	return string(decompressed)
@@ -887,11 +941,11 @@ func (rf *ResponseFilter) decompressBrotli(compressedBody []byte) string {
 
 	decompressed, err := io.ReadAll(brotliReader)
 	if err != nil {
-		logger.Debugf("[二次指纹] brotli读取失败: %v, 返回原始内容", err)
+		logger.Debugf("brotli读取失败: %v, 返回原始内容", err)
 		return string(compressedBody)
 	}
 
-	logger.Debugf("[二次指纹] brotli解压成功: %d bytes -> %d bytes",
+	logger.Debugf("brotli解压成功: %d bytes -> %d bytes",
 		len(compressedBody), len(decompressed))
 
 	return string(decompressed)

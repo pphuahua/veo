@@ -347,7 +347,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 	case err := <-errChan1:
 		cconn.Close()
 		conn.Close()
-		log.Debugf("[tls] 客户端TLS握手失败: %v", err)
+		log.Debugf("客户端TLS握手失败: %v", err)
 		return
 	case clientHello = <-clientHelloChan:
 	}
@@ -357,7 +357,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 		cconn.Close()
 		conn.Close()
 		errChan2 <- err
-		log.Debugf("[tls] 服务器TLS握手失败: %v", err)
+		log.Debugf("服务器TLS握手失败: %v", err)
 		return
 	}
 	serverTlsStateChan <- connCtx.ServerConn.tlsState
@@ -367,7 +367,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 	case err := <-errChan1:
 		cconn.Close()
 		conn.Close()
-		log.Debugf("[tls] 客户端TLS握手完成等待失败: %v", err)
+		log.Debugf("客户端TLS握手完成等待失败: %v", err)
 		return
 	case <-clientHandshakeDoneChan:
 	}
@@ -400,7 +400,7 @@ func (a *attacker) httpsLazyAttack(ctx context.Context, cconn net.Conn, req *htt
 	})
 	if err := clientTlsConn.HandshakeContext(ctx); err != nil {
 		cconn.Close()
-		log.Debugf("[tls] 延迟模式TLS握手失败: %v", err)
+		log.Debugf("延迟模式TLS握手失败: %v", err)
 		return
 	}
 

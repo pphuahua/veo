@@ -1,11 +1,11 @@
 package authlearning
 
 import (
+	"sync"
 	"veo/internal/core/config"
 	"veo/internal/core/logger"
 	"veo/internal/utils/auth"
 	"veo/proxy"
-	"sync"
 )
 
 // AuthLearningAddon 认证学习插件 - 在代理模式下自动学习传入请求中的Authorization头部
@@ -33,9 +33,9 @@ func (ala *AuthLearningAddon) SetEnabled(enabled bool) {
 
 	ala.enabled = enabled
 	if enabled {
-		logger.Info("[auth.learning] Authorization头部学习功能已启用")
+		logger.Info("Authorization头部学习功能已启用")
 	} else {
-		logger.Info("[auth.learning] Authorization头部学习功能已禁用")
+		logger.Info("Authorization头部学习功能已禁用")
 	}
 }
 
@@ -54,7 +54,7 @@ func (ala *AuthLearningAddon) Requestheaders(f *proxy.Flow) {
 
 	// 检查是否已经设置了CLI自定义头部
 	if config.HasCustomHeaders() {
-		logger.Debug("[auth.learning] 检测到CLI自定义头部，跳过认证学习")
+		logger.Debug("检测到CLI自定义头部，跳过认证学习")
 		return
 	}
 
@@ -102,7 +102,7 @@ func (ala *AuthLearningAddon) applyLearnedAuthToGlobalConfig(authHeaders map[str
 	// 更新全局配置
 	if newHeadersCount > 0 {
 		config.SetCustomHeaders(mergedHeaders)
-		logger.Debugf("[auth.learning] 应用了 %d 个新的Authorization头部到全局配置", newHeadersCount)
+		logger.Debugf("应用了 %d 个新的Authorization头部到全局配置", newHeadersCount)
 	}
 }
 
@@ -125,7 +125,7 @@ func (ala *AuthLearningAddon) ClearLearnedAuth() {
 
 	ala.learnedAuth = make(map[string]string)
 	ala.detector.ClearDetectedSchemes()
-	logger.Info("[auth.learning] 已清空学习到的Authorization头部")
+	logger.Info("已清空学习到的Authorization头部")
 }
 
 // HasLearnedAuth 检查是否学习到了Authorization头部

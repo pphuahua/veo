@@ -1,7 +1,6 @@
 package batch
 
 import (
-	"veo/internal/core/logger"
 	"bufio"
 	"fmt"
 	"net"
@@ -9,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"veo/internal/core/logger"
 )
 
 // TargetParser 目标文件解析器
@@ -21,7 +21,7 @@ func NewTargetParser() *TargetParser {
 
 // ParseFile 从文件解析目标列表
 func (tp *TargetParser) ParseFile(filePath string) ([]string, error) {
-	logger.Debugf("[batch.parser] 开始解析目标文件: %s", filePath)
+	logger.Debugf("开始解析目标文件: %s", filePath)
 
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -49,14 +49,14 @@ func (tp *TargetParser) ParseFile(filePath string) ([]string, error) {
 		return nil, fmt.Errorf("读取文件时发生错误: %v", err)
 	}
 
-	logger.Debugf("[batch.parser] 从文件解析到 %d 个目标", len(targets))
+	logger.Debugf("从文件解析到 %d 个目标", len(targets))
 	return targets, nil
 }
 
 // NormalizeURL 智能URL标准化
 // 根据端口自动判断协议，返回可能的URL列表
 func (tp *TargetParser) NormalizeURL(target string) []string {
-	logger.Debugf("[batch.parser] 开始标准化目标: %s", target)
+	logger.Debugf("开始标准化目标: %s", target)
 
 	// 如果已经有协议前缀，直接返回
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
@@ -66,7 +66,7 @@ func (tp *TargetParser) NormalizeURL(target string) []string {
 	// 解析主机和端口
 	host, port, err := tp.parseHostPort(target)
 	if err != nil {
-		logger.Debugf("[batch.parser] 解析主机端口失败: %v，同时尝试HTTP和HTTPS协议", err)
+		logger.Debugf("解析主机端口失败: %v，同时尝试HTTP和HTTPS协议", err)
 		// [重要] 连通性修复：解析失败时同时尝试HTTP和HTTPS协议
 		return []string{"http://" + target, "https://" + target}
 	}
@@ -91,7 +91,7 @@ func (tp *TargetParser) NormalizeURL(target string) []string {
 		}
 	}
 
-	logger.Debugf("[batch.parser] 目标 %s 标准化为: %v", target, urls)
+	logger.Debugf("目标 %s 标准化为: %v", target, urls)
 	return urls
 }
 

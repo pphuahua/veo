@@ -9,7 +9,7 @@ set -e  # 遇到错误立即退出
 # 配置区域
 # ============================================================================
 
-PROJECT_NAME="advent"
+PROJECT_NAME="veo"
 VERSION=${VERSION:-"v1.0.0"}
 BUILD_DIR="dist"
 RELEASE_DIR="release"

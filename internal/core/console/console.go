@@ -1,10 +1,10 @@
 package console
 
 import (
+	"runtime"
 	"veo/internal/core/logger"
 	"veo/internal/modules/fingerprint"
 	collector "veo/internal/utils/collector"
-	"runtime"
 )
 
 // WorkMode 工作模式类型
@@ -74,7 +74,7 @@ func NewConsoleManager(collector *collector.Collector) *ConsoleManager {
 // 参数 controller: 代理控制器实例
 func (cm *ConsoleManager) SetProxyController(controller ProxyController) {
 	cm.proxyController = controller
-	logger.Debug("[types.go] 代理控制器已设置")
+	logger.Debug("代理控制器已设置")
 }
 
 // SetFingerprintAddon 设置指纹识别插件
@@ -82,7 +82,7 @@ func (cm *ConsoleManager) SetProxyController(controller ProxyController) {
 // 参数 addon: 指纹识别插件实例
 func (cm *ConsoleManager) SetFingerprintAddon(addon *fingerprint.FingerprintAddon) {
 	cm.fingerprintAddon = addon
-	logger.Debug("[types.go] 指纹识别插件已设置")
+	logger.Debug("指纹识别插件已设置")
 }
 
 // ============================================================================

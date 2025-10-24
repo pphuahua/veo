@@ -1,11 +1,11 @@
 package config
 
 import (
-	"veo/internal/core/logger"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"veo/internal/core/logger"
 
 	"gopkg.in/yaml.v3"
 )
@@ -116,7 +116,7 @@ var GlobalConfig *Config
 
 // LoadConfig 加载配置文件
 func LoadConfig(configPath string) (*Config, error) {
-	logger.Debug("[config.go] 开始加载配置文件: ", configPath)
+	logger.Debug("开始加载配置文件: ", configPath)
 
 	// 检查配置文件是否存在
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -143,7 +143,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	// 设置全局配置
 	GlobalConfig = &config
 
-	logger.Debug("[config.go] 配置文件加载成功")
+	logger.Debug("配置文件加载成功")
 	logConfigSummary(&config)
 
 	return &config, nil
@@ -169,7 +169,7 @@ func validateConfig(config *Config) error {
 
 		// 检查字典文件是否存在
 		if _, err := os.Stat(config.Addon.Content.Common); os.IsNotExist(err) {
-			logger.Warn("[config.go] 通用字典文件不存在: ", config.Addon.Content.Common)
+			logger.Warn("通用字典文件不存在: ", config.Addon.Content.Common)
 		}
 	}
 
@@ -187,8 +187,8 @@ func validateConfig(config *Config) error {
 
 // logConfigSummary 打印配置摘要
 func logConfigSummary(config *Config) {
-	logger.Debug("[config.go] 配置摘要:")
-	logger.Debug("[config.go]   收集器状态码: ", config.Addon.Collector.GenerationStatusCodes)
+	logger.Debug("配置摘要:")
+	logger.Debug("  收集器状态码: ", config.Addon.Collector.GenerationStatusCodes)
 }
 
 // InitConfig 初始化配置（自动查找配置文件）
@@ -218,7 +218,7 @@ func GetConfig() *Config {
 	if GlobalConfig == nil {
 		// 尝试自动初始化配置
 		if err := InitConfig(); err != nil {
-			logger.Fatal("[config.go] 配置未初始化且自动初始化失败: ", err)
+			logger.Fatal("配置未初始化且自动初始化失败: ", err)
 		}
 	}
 	return GlobalConfig
@@ -350,11 +350,11 @@ type CLIOverrides struct {
 // 优先级: CLI参数 > config.yaml配置文件
 func ApplyCLIOverrides(cliOverrides *CLIOverrides) error {
 	if cliOverrides == nil {
-		logger.Debug("[config.go] 没有CLI覆盖参数")
+		logger.Debug("没有CLI覆盖参数")
 		return nil
 	}
 
-	logger.Info("[config.go] 正在应用CLI参数覆盖...")
+	logger.Info("正在应用CLI参数覆盖...")
 
 	// 应用主机白名单覆盖
 	if err := applyHostOverrides(cliOverrides.Hosts); err != nil {
@@ -371,14 +371,14 @@ func ApplyCLIOverrides(cliOverrides *CLIOverrides) error {
 		return fmt.Errorf("应用端口覆盖失败: %v", err)
 	}
 
-	logger.Info("[config.go] CLI参数覆盖应用完成")
+	logger.Info("CLI参数覆盖应用完成")
 	return nil
 }
 
 // applyHostOverrides 应用主机白名单覆盖
 func applyHostOverrides(hosts []string) error {
 	if len(hosts) == 0 {
-		logger.Debug("[config.go] 未指定主机覆盖")
+		logger.Debug("未指定主机覆盖")
 		return nil
 	}
 
@@ -390,7 +390,7 @@ func applyHostOverrides(hosts []string) error {
 	GlobalConfig.Hosts.Allow = make([]string, len(hosts))
 	copy(GlobalConfig.Hosts.Allow, hosts)
 
-	logger.Info(fmt.Sprintf("[config.go] 主机白名单已覆盖: %s (原配置: %s)",
+	logger.Info(fmt.Sprintf("主机白名单已覆盖: %s (原配置: %s)",
 		strings.Join(hosts, ", "),
 		strings.Join(originalHosts, ", ")))
 
@@ -400,7 +400,7 @@ func applyHostOverrides(hosts []string) error {
 // applyModuleOverrides 应用模块覆盖
 func applyModuleOverrides(modules []string) error {
 	if len(modules) == 0 {
-		logger.Debug("[config.go] 未指定模块覆盖")
+		logger.Debug("未指定模块覆盖")
 		return nil
 	}
 
@@ -414,14 +414,14 @@ func applyModuleOverrides(modules []string) error {
 		}
 	}
 
-	logger.Info(fmt.Sprintf("[config.go] 模块配置已覆盖: %s", strings.Join(modules, ", ")))
+	logger.Info(fmt.Sprintf("模块配置已覆盖: %s", strings.Join(modules, ", ")))
 	return nil
 }
 
 // applyPortOverride 应用端口覆盖
 func applyPortOverride(port *int) error {
 	if port == nil {
-		logger.Debug("[config.go] 未指定端口覆盖")
+		logger.Debug("未指定端口覆盖")
 		return nil
 	}
 
@@ -436,7 +436,7 @@ func applyPortOverride(port *int) error {
 	// 应用新端口
 	GlobalConfig.Server.Listen = fmt.Sprintf(":%d", *port)
 
-	logger.Info(fmt.Sprintf("[config.go] 监听端口已覆盖: %d (原配置: %s)",
+	logger.Info(fmt.Sprintf("监听端口已覆盖: %d (原配置: %s)",
 		*port, originalAddr))
 
 	return nil
@@ -444,7 +444,7 @@ func applyPortOverride(port *int) error {
 
 // resetAllModules 重置所有模块为禁用状态
 func resetAllModules() {
-	logger.Debug("[config.go] 重置所有模块状态为禁用")
+	logger.Debug("重置所有模块状态为禁用")
 
 	GlobalConfig.Module.Dirscan = false
 	GlobalConfig.Module.Fingerprint = false
@@ -452,17 +452,17 @@ func resetAllModules() {
 
 // enableModule 启用指定模块
 func enableModule(module string) error {
-	logger.Info(fmt.Sprintf("[config.go] 启用模块: %s", module))
+	logger.Info(fmt.Sprintf("启用模块: %s", module))
 
 	switch module {
 	case "finger", "fingerprint":
 		GlobalConfig.Module.Fingerprint = true
-		logger.Debug("[config.go] 指纹识别模块已启用")
+		logger.Debug("指纹识别模块已启用")
 		return nil
 
 	case "dirscan":
 		GlobalConfig.Module.Dirscan = true
-		logger.Debug("[config.go] 目录扫描模块已启用")
+		logger.Debug("目录扫描模块已启用")
 		return nil
 
 	default:
@@ -490,7 +490,7 @@ func SetCustomHeaders(headers map[string]string) {
 		globalCustomHeaders[key] = value
 	}
 
-	logger.Debugf("[config] 设置全局自定义HTTP头部: %d 个", len(globalCustomHeaders))
+	logger.Debugf("设置全局自定义HTTP头部: %d 个", len(globalCustomHeaders))
 }
 
 // GetCustomHeaders 获取全局自定义HTTP头部

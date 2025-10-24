@@ -1,10 +1,10 @@
 package batch
 
 import (
-	"veo/internal/core/logger"
 	"net/url"
 	"sort"
 	"strings"
+	"veo/internal/core/logger"
 )
 
 // Deduplicator 去重器
@@ -21,7 +21,7 @@ func NewDeduplicator() *Deduplicator {
 
 // Deduplicate 对目标列表去重
 func (d *Deduplicator) Deduplicate(targets []string) []string {
-	logger.Debugf("[batch.deduplicator] 开始去重，原始目标数量: %d", len(targets))
+	logger.Debugf("开始去重，原始目标数量: %d", len(targets))
 
 	var result []string
 
@@ -31,11 +31,11 @@ func (d *Deduplicator) Deduplicate(targets []string) []string {
 			d.seen[normalized] = true
 			result = append(result, target)
 		} else {
-			logger.Debugf("[batch.deduplicator] 发现重复目标: %s (标准化: %s)", target, normalized)
+			logger.Debugf("发现重复目标: %s (标准化: %s)", target, normalized)
 		}
 	}
 
-	logger.Debugf("[batch.deduplicator] 去重完成，去重后目标数量: %d", len(result))
+	logger.Debugf("去重完成，去重后目标数量: %d", len(result))
 	return result
 }
 
@@ -114,12 +114,12 @@ func NewBatchDeduplicator() *BatchDeduplicator {
 
 // MergeAndDeduplicate 合并多个目标列表并去重
 func (bd *BatchDeduplicator) MergeAndDeduplicate(targetLists ...[]string) []string {
-	logger.Debugf("[batch.deduplicator] 开始合并和去重多个目标列表")
+	logger.Debugf("开始合并和去重多个目标列表")
 
 	// 合并所有列表
 	var allTargets []string
 	for i, targets := range targetLists {
-		logger.Debugf("[batch.deduplicator] 列表 %d: %d 个目标", i+1, len(targets))
+		logger.Debugf("列表 %d: %d 个目标", i+1, len(targets))
 		allTargets = append(allTargets, targets...)
 	}
 
@@ -129,14 +129,14 @@ func (bd *BatchDeduplicator) MergeAndDeduplicate(targetLists ...[]string) []stri
 	// 排序以确保结果的一致性
 	sort.Strings(result)
 
-	logger.Debugf("[batch.deduplicator] 合并去重完成: %d -> %d", len(allTargets), len(result))
+	logger.Debugf("合并去重完成: %d -> %d", len(allTargets), len(result))
 	return result
 }
 
 // Reset 重置去重器状态
 func (d *Deduplicator) Reset() {
 	d.seen = make(map[string]bool)
-	logger.Debugf("[batch.deduplicator] 去重器状态已重置")
+	logger.Debugf("去重器状态已重置")
 }
 
 // GetSeenCount 获取已见过的目标数量

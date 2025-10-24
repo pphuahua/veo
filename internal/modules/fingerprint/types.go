@@ -57,16 +57,20 @@ type EngineConfig struct {
 
 // Engine 指纹识别引擎
 type Engine struct {
-	config      *EngineConfig
-	rules       map[string]*FingerprintRule // 规则映射表
-	matches     []*FingerprintMatch         // 匹配结果
-	dslParser   *DSLParser                  // DSL解析器
-	mu          sync.RWMutex                // 读写锁
-	stats       *Statistics                 // 统计信息
-	outputCache map[string]bool             // 已输出指纹的域名缓存
-	outputMutex sync.RWMutex                // 输出缓存的读写锁
-	iconCache   map[string]string           // 图标缓存：URL->MD5哈希值
-	iconMutex   sync.RWMutex                // 图标缓存的读写锁
+	config                   *EngineConfig
+	rules                    map[string]*FingerprintRule // 规则映射表
+	matches                  []*FingerprintMatch         // 匹配结果
+	dslParser                *DSLParser                  // DSL解析器
+	mu                       sync.RWMutex                // 读写锁
+	stats                    *Statistics                 // 统计信息
+	outputCache              map[string]bool             // 已输出指纹的域名缓存
+	outputMutex              sync.RWMutex                // 输出缓存的读写锁
+	iconCache                map[string]string           // 图标缓存：URL->MD5哈希值
+	iconMutex                sync.RWMutex                // 图标缓存的读写锁
+	staticExtensions         []string
+	staticContentTypes       []string
+	staticFileFilterEnabled  bool
+	contentTypeFilterEnabled bool
 }
 
 // Statistics 统计信息

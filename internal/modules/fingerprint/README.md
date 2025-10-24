@@ -248,7 +248,7 @@ type Statistics struct {
 ```
 [fingerprint.engine] 开始加载指纹规则: configs/fingerprint/...
 [fingerprint.engine] 成功加载 2452 个指纹规则
-[fingerprint.addon] 指纹识别插件初始化完成
+指纹识别插件初始化完成
 ```
 
 ### 匹配日志

@@ -1,18 +1,6 @@
 package cli
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	"veo/internal/modules/fingerprint"
-	report "veo/internal/modules/reporter"
-	"veo/internal/utils/batch"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/formatter"
-	"veo/internal/utils/generator"
-	"veo/internal/utils/httpclient"
-	requests "veo/internal/utils/processor"
-	"veo/internal/utils/scheduler"
-	"veo/internal/utils/stats"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -25,6 +13,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/interfaces"
+	"veo/internal/modules/fingerprint"
+	report "veo/internal/modules/reporter"
+	"veo/internal/utils/batch"
+	"veo/internal/utils/filter"
+	"veo/internal/utils/formatter"
+	"veo/internal/utils/generator"
+	"veo/internal/utils/httpclient"
+	requests "veo/internal/utils/processor"
+	"veo/internal/utils/scheduler"
+	"veo/internal/utils/stats"
 
 	"veo/internal/core/logger"
 
@@ -945,9 +945,9 @@ func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPRespon
 	// [新增] 如果指纹引擎可用，设置到过滤器中（启用二次识别）
 	if sc.fingerprintEngine != nil {
 		responseFilter.SetFingerprintEngine(sc.fingerprintEngine)
-		logger.Debugf("[二次指纹] 目录扫描模块已启用指纹二次识别功能，引擎类型: %T", sc.fingerprintEngine)
+		logger.Debugf("目录扫描模块已启用指纹二次识别功能，引擎类型: %T", sc.fingerprintEngine)
 	} else {
-		logger.Debugf("[二次指纹] 指纹引擎为nil，未启用二次识别")
+		logger.Debugf("指纹引擎为nil，未启用二次识别")
 	}
 
 	// [关键] 重置过滤器状态，确保目标间状态隔离

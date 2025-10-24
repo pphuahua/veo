@@ -229,7 +229,7 @@ func ParseCLIArgs() *CLIArgs {
 	// [新增] 如果未指定模块，使用默认模块
 	if len(args.Modules) == 0 {
 		args.Modules = []string{string(module.ModuleFinger), string(module.ModuleDirscan)}
-		logger.Infof("未指定模块，使用默认模块: %s, %s", module.ModuleFinger, module.ModuleDirscan)
+		logger.Debugf("未指定模块，使用默认模块: %s, %s", module.ModuleFinger, module.ModuleDirscan)
 	}
 
 	// 验证参数

@@ -2,10 +2,12 @@
 # 整合编译、优化和发布流程
 
 # 项目配置
-PROJECT_NAME := advent
+PROJECT_NAME := veo
 VERSION ?= v1.0.0
 BUILD_DIR := dist
 RELEASE_DIR := release
+BUILD_SCRIPT := ./build.sh
+OUTPUT_DIR := $(BUILD_DIR)
 
 # Go 编译配置
 MAIN_FILE := ./cmd/main.go
@@ -314,12 +316,6 @@ all: clean deps check test build-all compress ## 完整构建流程
 # 文件目标
 # ============================================================================
 
-$(BUILD_DIR):
-	@mkdir -p $(BUILD_DIR)
-
-$(RELEASE_DIR):
-	@mkdir -p $(RELEASE_DIR)
-
 # 防止文件名冲突
 .PHONY: build build-all build-windows build-linux build-darwin \
         build-optimized build-debug compress clean clean-dist clean-release \
@@ -339,8 +335,8 @@ build-darwin-optimized: ## 编译macOS优化版本
 build-darwin-debug: deps ## 编译macOS调试版本 (保留调试信息)
 	@echo "[BUILD-DARWIN-DEBUG] 编译macOS调试版本..."
 	@mkdir -p $(OUTPUT_DIR)
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o $(OUTPUT_DIR)/advent_darwin_amd64_debug $(MAIN_FILE)
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o $(OUTPUT_DIR)/advent_darwin_arm64_debug $(MAIN_FILE)
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o $(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_amd64_debug $(MAIN_FILE)
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o $(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_arm64_debug $(MAIN_FILE)
 
 # 测试macOS优化效果
 test-macos-optimization: clean build-darwin-debug build-darwin-optimized ## 对比macOS优化效果
@@ -348,20 +344,20 @@ test-macos-optimization: clean build-darwin-debug build-darwin-optimized ## 对�
 	@echo "=========================================="
 	@echo "🍎 macOS二进制文件大小对比:"
 	@echo "=========================================="
-	@if [ -f "$(OUTPUT_DIR)/advent_darwin_amd64_debug" ]; then \
-		DEBUG_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/advent_darwin_amd64_debug)); \
+	@if [ -f "$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_amd64_debug" ]; then \
+		DEBUG_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_amd64_debug)); \
 		echo "  调试版本 (amd64): $$DEBUG_SIZE"; \
 	fi
-	@if [ -f "$(OUTPUT_DIR)/advent_darwin_amd64" ]; then \
-		OPT_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/advent_darwin_amd64)); \
+	@if [ -f "$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_amd64" ]; then \
+		OPT_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_amd64)); \
 		echo "  优化版本 (amd64): $$OPT_SIZE"; \
 	fi
-	@if [ -f "$(OUTPUT_DIR)/advent_darwin_arm64_debug" ]; then \
-		DEBUG_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/advent_darwin_arm64_debug)); \
+	@if [ -f "$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_arm64_debug" ]; then \
+		DEBUG_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_arm64_debug)); \
 		echo "  调试版本 (arm64): $$DEBUG_SIZE"; \
 	fi
-	@if [ -f "$(OUTPUT_DIR)/advent_darwin_arm64" ]; then \
-		OPT_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/advent_darwin_arm64)); \
+	@if [ -f "$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_arm64" ]; then \
+		OPT_SIZE=$$($(call get_file_size,$(OUTPUT_DIR)/$(PROJECT_NAME)_darwin_arm64)); \
 		echo "  优化版本 (arm64): $$OPT_SIZE"; \
 	fi
-	@echo "==========================================" 
+	@echo "=========================================="

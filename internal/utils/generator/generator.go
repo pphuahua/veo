@@ -1,15 +1,15 @@
 package generator
 
 import (
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	"veo/internal/utils/dictionary"
 	"veo/internal/utils/shared"
-	"fmt"
-	"net/url"
-	"strings"
-	"sync"
 )
 
 // 模板变量定义
@@ -68,7 +68,7 @@ func (ug *URLGenerator) GenerateURLsFromCollector(collector interfaces.URLCollec
 	// 获取收集的URL
 	urlMap := collector.GetURLMap()
 	if len(urlMap) == 0 {
-		logger.Info("[url_generator] 没有收集到URL，无法生成扫描内容")
+		logger.Info("没有收集到URL，无法生成扫描内容")
 		return []string{}
 	}
 
@@ -78,7 +78,7 @@ func (ug *URLGenerator) GenerateURLsFromCollector(collector interfaces.URLCollec
 	// 生成扫描URL
 	scanURLs := ug.GenerateURLs(baseURLs)
 
-	logger.Debug(fmt.Sprintf("[url_generator] URL生成完成: 基础URL %d 个, 生成扫描URL %d 个",
+	logger.Debug(fmt.Sprintf("URL生成完成: 基础URL %d 个, 生成扫描URL %d 个",
 		len(baseURLs), len(scanURLs)))
 
 	return scanURLs
@@ -97,14 +97,14 @@ func (ug *URLGenerator) GenerateURLs(baseURLs []string) []string {
 	// [重要] 性能优化：移除每次的字典加载检查，依赖全局缓存
 	// 字典将在首次访问时自动加载到全局缓存
 
-	logger.Debug(fmt.Sprintf("[url_generator] 开始生成扫描URL，基础URL数量: %d", len(baseURLs)))
+	logger.Debug(fmt.Sprintf("开始生成扫描URL，基础URL数量: %d", len(baseURLs)))
 
 	// 处理每个基础URL
 	for i, baseURL := range baseURLs {
-		logger.Debug(fmt.Sprintf("[url_generator] 处理基础URL [%d/%d]: %s", i+1, len(baseURLs), baseURL))
+		logger.Debug(fmt.Sprintf("处理基础URL [%d/%d]: %s", i+1, len(baseURLs), baseURL))
 
 		if !ug.urlValidator.IsValidURL(baseURL) {
-			logger.Debugf("[url_generator] 无效的基础URL: %s", baseURL)
+			logger.Debugf("无效的基础URL: %s", baseURL)
 			continue
 		}
 
@@ -114,7 +114,7 @@ func (ug *URLGenerator) GenerateURLs(baseURLs []string) []string {
 	// 去重
 	ug.deduplicateURLs()
 
-	logger.Debug(fmt.Sprintf("[url_generator] URL生成完成，总计: %d 个", len(ug.generatedURLs)))
+	logger.Debug(fmt.Sprintf("URL生成完成，总计: %d 个", len(ug.generatedURLs)))
 
 	// 返回副本
 	result := make([]string, len(ug.generatedURLs))
@@ -126,7 +126,7 @@ func (ug *URLGenerator) GenerateURLs(baseURLs []string) []string {
 func (ug *URLGenerator) generateURLsForBase(baseURL string) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
-		logger.Debug("[url_generator] URL解析失败: ", baseURL)
+		logger.Debug("URL解析失败: ", baseURL)
 		return
 	}
 
@@ -162,10 +162,10 @@ func (ug *URLGenerator) generateRootURLs(components URLComponents) {
 		filesDict := ug.dictManager.GetFilesDictionary()
 		if len(filesDict) > 0 {
 			ug.generateURLsFromDictionary(components, "", filesDict, "文件字典")
-			logger.Debug("[url_generator] 文件字典已启用，仅在根目录使用")
+			logger.Debug("文件字典已启用，仅在根目录使用")
 		}
 	} else {
-		logger.Debug("[url_generator] 文件字典已禁用，跳过文件字典使用")
+		logger.Debug("文件字典已禁用，跳过文件字典使用")
 	}
 }
 
@@ -234,7 +234,7 @@ func (ug *URLGenerator) generateURLsFromDictionary(components URLComponents, bas
 		}
 	}
 
-	logger.Debug(fmt.Sprintf("[url_generator] 使用%s生成URL完成", dictType))
+	logger.Debug(fmt.Sprintf("使用%s生成URL完成", dictType))
 }
 
 // splitPath 分割路径
@@ -265,7 +265,7 @@ func (ug *URLGenerator) deduplicateURLs() {
 	afterCount := len(ug.generatedURLs)
 
 	if beforeCount != afterCount {
-		logger.Debug(fmt.Sprintf("[url_generator] 去重完成: 去重前 %d 个, 去重后 %d 个, 去除重复 %d 个",
+		logger.Debug(fmt.Sprintf("去重完成: 去重前 %d 个, 去重后 %d 个, 去除重复 %d 个",
 			beforeCount, afterCount, beforeCount-afterCount))
 	}
 }
@@ -295,7 +295,7 @@ func (ug *URLGenerator) Reset() {
 	defer ug.mu.Unlock()
 
 	ug.generatedURLs = make([]string, 0)
-	logger.Debug("[url_generator] URL生成器已重置")
+	logger.Debug("URL生成器已重置")
 }
 
 // ===========================================
@@ -330,7 +330,7 @@ func (ug *URLGenerator) processTemplateVariables(dictEntry string, domain string
 
 	// 只在有替换时记录日志
 	if hasReplacement {
-		logger.Debug(fmt.Sprintf("[url_generator] 模板变量替换: %s -> %s (域名: %s, 路径: %s)",
+		logger.Debug(fmt.Sprintf("模板变量替换: %s -> %s (域名: %s, 路径: %s)",
 			dictEntry, processedEntry, domain, currentPath))
 	}
 
@@ -381,7 +381,7 @@ func (cm *ContentManager) SetCollector(collector interfaces.URLCollectorInterfac
 	defer cm.mu.Unlock()
 
 	cm.collector = collector
-	logger.Debug("[content_manager] URL收集器已设置")
+	logger.Debug("URL收集器已设置")
 }
 
 // GenerateScanURLs 生成扫描URL
@@ -391,7 +391,7 @@ func (cm *ContentManager) GenerateScanURLs() []string {
 	cm.mu.RUnlock()
 
 	if collector == nil {
-		logger.Warn("[content_manager] URL收集器未设置，无法生成扫描URL")
+		logger.Warn("URL收集器未设置，无法生成扫描URL")
 		return []string{}
 	}
 
@@ -409,5 +409,5 @@ func (cm *ContentManager) Reset() {
 	defer cm.mu.Unlock()
 
 	cm.urlGenerator.Reset()
-	logger.Debug("[content_manager] 内容管理器已重置")
+	logger.Debug("内容管理器已重置")
 }

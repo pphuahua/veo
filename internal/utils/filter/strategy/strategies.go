@@ -1,12 +1,12 @@
 package strategy
 
 import (
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
 	"crypto/md5"
 	"fmt"
 	"strings"
 	"sync"
+	"veo/internal/core/interfaces"
+	"veo/internal/core/logger"
 )
 
 // ============================================================================
@@ -273,9 +273,9 @@ func NewHashFilter(threshold int, tolerance int64) *HashFilter {
 	}
 
 	if tolerance == 0 {
-		logger.Debugf("[哈希过滤器] 创建主要过滤器 - 重复阈值: %d, 容错阈值: 0 字节 (禁用容错过滤)", threshold)
+		logger.Debugf("创建主要过滤器 - 重复阈值: %d, 容错阈值: 0 字节 (禁用容错过滤)", threshold)
 	} else {
-		logger.Debugf("[哈希过滤器] 创建主要过滤器 - 重复阈值: %d, 容错阈值: %d 字节", threshold, tolerance)
+		logger.Debugf("创建主要过滤器 - 重复阈值: %d, 容错阈值: %d 字节", threshold, tolerance)
 	}
 
 	return &HashFilter{
@@ -338,18 +338,18 @@ func NewSecondaryFilter(threshold int, tolerance int64) *SecondaryFilter {
 	// 二次筛选使用更小的容错阈值
 	if tolerance == 0 {
 		// tolerance=0 表示禁用容错过滤
-		logger.Debugf("[哈希过滤器] 创建二次过滤器 - 重复阈值: %d, 容错阈值: 0 字节 (禁用容错过滤)", threshold)
+		logger.Debugf("创建二次过滤器 - 重复阈值: %d, 容错阈值: 0 字节 (禁用容错过滤)", threshold)
 	} else if tolerance < 0 {
 		// tolerance<0 表示使用默认值
 		tolerance = 20 // 默认20字节容错
-		logger.Debugf("[哈希过滤器] 创建二次过滤器 - 重复阈值: %d, 容错阈值: %d 字节", threshold, tolerance)
+		logger.Debugf("创建二次过滤器 - 重复阈值: %d, 容错阈值: %d 字节", threshold, tolerance)
 	} else {
 		// 二次筛选的容错阈值为主要过滤器的40%
 		tolerance = tolerance * 40 / 100
 		if tolerance < 20 {
 			tolerance = 20 // 最小20字节
 		}
-		logger.Debugf("[哈希过滤器] 创建二次过滤器 - 重复阈值: %d, 容错阈值: %d 字节", threshold, tolerance)
+		logger.Debugf("创建二次过滤器 - 重复阈值: %d, 容错阈值: %d 字节", threshold, tolerance)
 	}
 
 	return &SecondaryFilter{

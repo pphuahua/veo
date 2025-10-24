@@ -11,7 +11,7 @@ set -e  # 遇到错误立即退出
 # ============================================================================
 
 # 项目信息
-PROJECT_NAME="advent"
+PROJECT_NAME="veo"
 MAIN_FILE="./cmd/main.go"
 OUTPUT_DIR="dist"
 

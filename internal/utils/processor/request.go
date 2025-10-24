@@ -1,11 +1,6 @@
 package processor
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	"veo/internal/utils/auth"
-	"veo/internal/utils/shared"
-	"veo/proxy"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -17,6 +12,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/interfaces"
+	"veo/internal/utils/auth"
+	"veo/internal/utils/shared"
+	"veo/proxy"
 
 	"veo/internal/core/logger"
 
@@ -158,10 +158,10 @@ func (rp *RequestProcessor) SetCustomHeaders(headers map[string]string) {
 	// 如果设置了自定义头部，禁用自动检测
 	if len(headers) > 0 {
 		rp.authDetector.SetEnabled(false)
-		logger.Debugf("[request.processor] 设置了 %d 个自定义头部，禁用自动认证检测", len(headers))
+		logger.Debugf("设置了 %d 个自定义头部，禁用自动认证检测", len(headers))
 	} else {
 		rp.authDetector.SetEnabled(true)
-		logger.Debug("[request.processor] 未设置自定义头部，启用自动认证检测")
+		logger.Debug("未设置自定义头部，启用自动认证检测")
 	}
 }
 
@@ -1044,7 +1044,7 @@ func (rp *RequestProcessor) handleAuthDetection(resp *fasthttp.Response, url str
 	// 执行认证检测
 	detectedHeaders := rp.authDetector.DetectAuthRequirements(httpResp, url)
 	if len(detectedHeaders) > 0 {
-		logger.Debugf("[request.processor] 检测到认证要求，将应用到后续请求: %s", url)
+		logger.Debugf("检测到认证要求，将应用到后续请求: %s", url)
 	}
 }
 

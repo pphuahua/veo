@@ -1,10 +1,6 @@
 package fingerprint
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/logger"
-	"veo/internal/utils/formatter"
-	"veo/internal/utils/shared"
 	"crypto/md5"
 	"fmt"
 	"io/ioutil"
@@ -16,6 +12,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/logger"
+	"veo/internal/utils/formatter"
+	"veo/internal/utils/shared"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,9 +46,51 @@ func NewEngine(config *EngineConfig) *Engine {
 		stats: &Statistics{
 			StartTime: time.Now(),
 		},
+		staticExtensions:         append([]string(nil), StaticFileExtensions...),
+		staticContentTypes:       append([]string(nil), StaticContentTypes...),
+		staticFileFilterEnabled:  true,
+		contentTypeFilterEnabled: true,
 	}
 
 	return engine
+}
+
+// SetStaticContentTypes 设置自定义静态Content-Type列表
+func (e *Engine) SetStaticContentTypes(contentTypes []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if contentTypes == nil {
+		e.staticContentTypes = append([]string(nil), StaticContentTypes...)
+	} else {
+		e.staticContentTypes = cloneStringSlice(contentTypes)
+	}
+}
+
+// SetStaticFileExtensions 设置自定义静态文件扩展名列表
+func (e *Engine) SetStaticFileExtensions(extensions []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if extensions == nil {
+		e.staticExtensions = append([]string(nil), StaticFileExtensions...)
+	} else {
+		e.staticExtensions = cloneStringSlice(extensions)
+	}
+}
+
+// SetStaticFileFilterEnabled 控制是否启用静态文件过滤
+func (e *Engine) SetStaticFileFilterEnabled(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.staticFileFilterEnabled = enabled
+}
+
+// SetContentTypeFilterEnabled 控制是否启用Content-Type过滤
+func (e *Engine) SetContentTypeFilterEnabled(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.contentTypeFilterEnabled = enabled
 }
 
 // LoadRules 加载指纹识别规则（支持单文件或目录）
@@ -388,21 +430,56 @@ func (e *Engine) shouldFilterResponse(response *HTTPResponse) bool {
 
 // isStaticFile 检查URL是否指向静态文件（使用共享工具）
 func (e *Engine) isStaticFile(rawURL string) bool {
-	checker := shared.NewFileExtensionChecker()
-	return checker.IsStaticFile(rawURL)
-}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
-// isStaticContentType 检查Content-Type是否为静态类型
-func (e *Engine) isStaticContentType(contentType string) bool {
-	contentType = strings.ToLower(contentType)
+	if !e.staticFileFilterEnabled || len(e.staticExtensions) == 0 {
+		return false
+	}
 
-	for _, staticType := range StaticContentTypes {
-		if strings.HasPrefix(contentType, staticType) {
+	lowerURL := strings.ToLower(rawURL)
+	for _, ext := range e.staticExtensions {
+		if ext == "" {
+			continue
+		}
+		if strings.HasSuffix(lowerURL, strings.ToLower(ext)) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// isStaticContentType 检查Content-Type是否为静态类型
+func (e *Engine) isStaticContentType(contentType string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if !e.contentTypeFilterEnabled || len(e.staticContentTypes) == 0 {
+		return false
+	}
+
+	contentType = strings.ToLower(contentType)
+
+	for _, staticType := range e.staticContentTypes {
+		if staticType == "" {
+			continue
+		}
+		if strings.HasPrefix(contentType, strings.ToLower(staticType)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func cloneStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	clone := make([]string, len(values))
+	copy(clone, values)
+	return clone
 }
 
 // GetMatches 获取所有匹配结果
