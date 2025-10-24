@@ -1,0 +1,220 @@
+server:
+  listen: ":9080"
+
+hosts:
+  allow:
+    - "*"
+
+  reject:
+    - "*.msn.cn"
+    - "*.googlesyndication.com"
+    - "*.amap.com"
+    - "*.bing.net"
+    - "*.scorecardresearch.com"
+    - "*.aliyun.com"
+    - "*.weixin.qq.com"
+    - "*.msn.com"
+    - "*.bilibili.com"
+    - "*.qianxin.com"
+    - "*.360.cn"
+    - "*.dnslogger.cn"
+    - "*.msn.cn"
+    - "*.google.*"
+    - "*.github.*"
+    - "*.shodan.io"
+    - "*.fofa.info"
+    - "*.adblockplus.org"
+    - "*.bing.com"
+    - "*.baidu.com"
+    - "*.qianxin.com"
+    - "*.qlogo.cn"
+    - "*.firefox.com.cn"
+    - "*.g-fox.cn"
+    - "*.qpic.cn"
+    - "*.fofa.info"
+    - "*.mozilla.net"
+    - "*.firefox.cn"
+    - "*.bdstatic.com"
+    - "*.baidu.com"
+    - "*.firefoxchina.cn"
+    - "*.mozilla.org"
+    - "*.qq.com"
+    - "wx.qlogo.cn"
+    - "webapp.163.com"
+    - "*.netease.com"
+    - "*.mozilla.com"
+    - "*.microsoft.com"
+    - "mozilla.cloudflare-dns.com"
+    - "*.googleapis.com"
+    - "*.amap.com"
+    - "*.tencent-cloud.com"
+    - "*.firefox.com"
+    - "ingest.sentry.io"
+    - "*.servicewechat.com"
+    - "*.detectportal.firefox.com"
+    - "*.wappalyzer.com"
+    - "raw.githubusercontent.com"
+    - "*.githubassets.com"
+    - "*.github.com"
+    - "*.googleusercontent.com"
+    - "*.youtube.com"
+    - "*.ggpht.com"
+    - "doubleclick.net"
+    - "*.ytimg.com"
+    - "*.gstatic.com"
+    - "*.google.co.jp"
+    - "*.google.com"
+    - "*.google.cn"
+    - "api.ipify.org"
+    - "*.ceye.io"
+    - "api.github.com"
+    - "api.githubassets.com"
+    - "*.githubusercontent.com"
+    - "*.github.io"
+
+addon:
+  filter:
+    enable: true
+    hash: true
+    ValidStatusCodes:
+      - 200
+      - 401
+      - 403
+      - 405
+      - 302
+      - 301
+      - 500
+    filter_tolerance: 50  # 相似页面过滤容错阈值（字节），0表示禁用容错过滤
+
+  collector:
+    GenerationStatusCodes:
+      - 200
+      - 403
+      - 401
+      - 500
+      - 405
+    
+    static:
+      path:
+        - "/undefined"
+        - "/bundles"
+        - "/bootstrap"
+        - "/jquery"
+        - "/wrapper"
+        - "/cdn"
+        - "/randomImage"
+        - "/assets/"
+        - "/css/"
+        - "/css"
+        - "/js/"
+        - "/js"
+        - "/javascript/"
+        - "/javascript"
+        - "/stylesheets/"
+        - "/stylesheets"
+        - "/styles/"
+        - "/styles"
+        - "/images/"
+        - "/img/"
+        - "/pics/"
+        - "/pictures/"
+        - "/fonts/"
+        - "/font/"
+        - "/favicon"
+        - "/media/"
+        - "/style/"
+        - "/stylesheet/"
+  
+      extensions:
+        - ".log"
+        - ".php"
+        - ".html"
+        - ".htm"
+        - ".jsp"
+        - ".asp"
+        - ".aspx"
+        - ".ashx"
+        - ".jspx"
+        - ".json"
+        - ".css"
+        - ".scss"
+        - ".sass"
+        - ".less"
+        - ".min.css"
+        - ".js"
+        - ".jsx"
+        - ".ts"
+        - ".tsx"
+        - ".coffee"
+        - ".min.js"
+        - ".jpg"
+        - ".jpeg"
+        - ".png"
+        - ".gif"
+        - ".bmp"
+        - ".svg"
+        - ".ico"
+        - ".webp"
+        - ".tiff"
+        - ".tif"
+        - ".woff"
+        - ".woff2"
+        - ".ttf"
+        - ".otf"
+        - ".eot"
+        - ".mp4"
+        - ".avi"
+        - ".mov"
+        - ".wmv"
+        - ".flv"
+        - ".webm"
+        - ".mkv"
+        - ".mp3"
+        - ".wav"
+        - ".ogg"
+        - ".m4a"
+        - ".aac"
+        - ".flac"
+        - ".map"
+        - ".manifest"
+        - ".cache"
+        - ".swf"
+        - ".txt"
+
+  request:
+    retry: 2
+    depth: 1
+    timeout: 5
+    threads: 200
+    randomUA: true
+    max_response_body_size: 1048576
+
+    user_agents:
+      - 
+
+  content:
+    files_dict: true
+    common_dict: true
+    api_dict: true
+    common: "dict/common.txt"
+    api: "dict/api.txt"
+    files: "dict/files.txt"
+
+  proxy:
+    # HTTP代理: http://proxy:port 或 http://user:pass@proxy:port
+    # HTTPS代理: https://proxy:port 或 https://user:pass@proxy:port
+    # SOCKS5代理: socks5://proxy:port 或 socks5://user:pass@proxy:port
+    upstream_proxy: ""
+    stream_largebody: 5242880   # 5MB
+    ssl_insecure: true
+    connect_timeout: 15
+    read_timeout: 15
+
+  # 报告配置
+  report:
+    max_bodysize: 1000             # 响应体内容最大显示字符数
+
+# 日志控制配置
+log:
+  level: info           # 日志级别: debug, info, warn, error, fatal
+  color_output: true    # 启用彩色输出（Windows ANSI支持）

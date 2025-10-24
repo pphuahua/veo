@@ -1,0 +1,205 @@
+OSSKey泄漏:
+  dsl:
+  - contains(body, 'ACCESSID')
+  - contains(body, 'ACCESSKEY')
+  - contains(body, 'accessKeyId')
+  - contains(body, 'accessKeySecret')
+  - contains(body, 'ALIYUN_ACCESS_ID')
+  - contains(body, 'ALIYUN_ACCESS_KEY')
+  - contains(body, 'securityToken')
+  - contains(body, 'SSOusername')
+  - contains(body, 'SSOpassword')
+  - contains(body, 'oss://')
+  - contains(body, 'appsecret')
+  - regex(body,'((?i)((access_key|appsecret|app_secret|access_token|password|secretkey|accesskey|accesskeyid|accesskeysecret|secret_key|pwd|test_user|admin_pass|admin_user|algolia_admin_key|algolia_api_key|alias_pass|alicloud_access_key|amazon_secret_access_key|amazonaws|ansible_vault_password|aos_key|api_key|api_key_secret|api_key_sid|api_secret|api.googlemaps AIza|apidocs|apikey|apiSecret|app_debug|app_id|app_key|app_log_level|app_secret|appkey|appkeysecret|application_key|appsecret|appspot|auth_token|authorizationToken|authsecret|aws_access|aws_access_key_id|aws_bucket|aws_key|aws_secret|aws_secret_key|aws_token|AWSSecretKey|b2_app_key|bashrc password|bintray_apikey|bintray_gpg_password|bintray_key|bintraykey|bluemix_api_key|bluemix_pass|browserstack_access_key|bucket_password|bucketeer_aws_access_key_id|bucketeer_aws_secret_access_key|built_branch_deploy_key|bx_password|cache_driver|cache_s3_secret_key|cattle_access_key|cattle_secret_key|certificate_password|ci_deploy_password|client_secret|client_zpk_secret_key|clojars_password|cloud_api_key|cloud_watch_aws_access_key|cloudant_password|cloudflare_api_key|cloudflare_auth_key|cloudinary_api_secret|cloudinary_name|codecov_token|config|conn.login|connectionstring|consumer_key|consumer_secret|credentials|cypress_record_key|database_password|database_schema_test|datadog_api_key|datadog_app_key|db_password|db_server|db_username|dbpasswd|dbpassword|dbuser|deploy_password|digitalocean_ssh_key_body|digitalocean_ssh_key_ids|docker_hub_password|docker_key|docker_pass|docker_passwd|docker_password|dockerhub_password|dockerhubpassword|dot-files|dotfiles|droplet_travis_password|dynamoaccesskeyid|dynamosecretaccesskey|elastica_host|elastica_port|elasticsearch_password|encryption_key|encryption_password|env.heroku_api_key|env.sonatype_password|eureka.awssecretkey)[a-z0-9_.]{0,25})(=|>|:=|:|<=|=>|:).{0,5}['\"\ ]([0-9a-zA-Z-_=]{12,64})['\"\ ])')
+
+UCKey泄漏:
+  dsl:
+  - contains(body, 'UC_DBHOST')
+  - contains(body, 'UC_DBUSER')
+  - contains(body, 'UC_KEY')
+  - contains(body, 'UC_API')
+
+JDBC泄漏:
+  dsl:
+  - contains(body, 'jdbc:mysql:')
+  - contains(body, 'jdbc:h2:')
+  - contains(body, 'jdbc:oracle:')
+  - contains(body, 'jdbc:sqlserver:')
+  - contains(body, 'jdbc:jtds:sqlserver')
+  - contains(body, 'System.Data.SqlClient')
+  - contains(body, 'Data.PassportContext')
+  - contains(body, 'mysql.username')
+  - contains(body, 'mysql.password')
+  - contains(body, 'mysql.url')
+  - contains(body, 'jdbc.username')
+  - contains(body, 'jdbc.password')
+  - contains(body, 'mysql:host')
+  - contains(body, 'mssql.jdbc.')
+  - contains(body, 'mssql.user')
+  - contains(body, 'com.microsoft.sqlserver.jdbc.SQLServerDriver')
+
+邮箱凭证泄漏:
+  dsl:
+  - contains(body, 'EMAIL_HOST_USER')
+  - contains(body, 'EMAIL_HOST_PASSWORD')
+  - contains(body, 'mail.username')
+  - contains(body, 'mail.password')
+  - contains(body, 'mail.user.name')
+  - contains(body, 'sender.username')
+  - contains(body, 'sender.password')
+  - contains(body, 'mailUserPwd')
+  - contains(body, 'mailUserName')
+  - contains(body, 'smtplib.SMTP')
+  - contains(body, 'mail_user')
+  - contains(body, 'mail_pass')
+  - contains(body, 'EMAIL_PSWD')
+  - contains(body, 'EMAIL_USER')
+  - contains(body, 'EMAIL_LOGIN_NAME')
+  - contains(body, 'EMAIL_LOGIN_PASSWD')
+  - contains(body, 'email_username')
+  - contains(body, 'email_password')
+  - contains(body, 'smtp_username')
+  - contains(body, 'smtp_password')
+  - contains(body, 'mailuser')
+  - contains(body, 'mailPassword')
+  - contains(body, 'mailServerUsername')
+  - contains(body, 'mailServerPassword')
+  - contains(body, 'WebMail.UserName')
+  - contains(body, 'WebMail.Password')
+
+FTP泄漏:
+  dsl:
+  - contains(body, 'ftpUsername')
+  - contains(body, 'ftpPassword')
+  - contains(body, 'FTP_USER')
+  - contains(body, 'FTP_ADDR')
+  - contains(body, 'FTP_PASS')
+
+SSH泄漏:
+  dsl:
+  - contains(body, 'ssh://')
+
+管理员凭证泄漏:
+  dsl:
+  - contains(body, 'admin_password')
+  - contains(body, 'admin_user')
+
+ProcessOn泄漏:
+  dsl:
+  - contains(body, 'processon.com/view/link/')
+
+飞书协同泄漏:
+  dsl:
+  - contains(body, 'feishu.cn/file/')
+  - contains(body, 'feishu.cn/drive/')
+  - contains(body, 'feishu.cn/sheets/')
+
+钉钉文档泄漏:
+  dsl:
+  - contains(body, 'https://alidocs.dingtalk.com/document/')
+  - contains(body, 'https://alidocs.dingtalk.com/spreadsheetv2/')
+  - contains(body, 'https://alidocs.dingtalk.com/mind/')
+
+腾讯文档泄漏:
+  dsl:
+  - contains(body, 'docs.qq.com/sheet/')
+  - contains(body, 'docs.qq.com/doc/')
+  - contains(body, 'docs.qq.com/slide/')
+  - contains(body, 'docs.qq.com/form/')
+  - contains(body, 'docs.qq.com/mind/')
+  - contains(body, 'docs.qq.com/flowchart/')
+
+Google协作文档泄漏:
+  dsl:
+  - contains(body, 'docs.google.com/presentation/')
+  - contains(body, 'docs.google.com/document/')
+  - contains(body, 'docs.google.com/spreadsheets/')
+
+语雀文档泄漏:
+  dsl:
+  - contains(body, 'www.yuque.com/docs/share/')
+  - contains(body, 'www.yuque.com/g/')
+
+gitmind泄漏:
+  dsl:
+  - contains(body, 'gitmind.cn/app/doc/')
+
+百度云盘泄漏:
+  dsl:
+  - contains(body, 'pan.baidu.com/s/')
+
+幕布文档泄漏:
+  dsl:
+  - contains(body, 'mubucm.com/doc/')
+  - contains(body, 'mubu.com/doc/')
+
+有道云笔记泄漏:
+  dsl:
+  - contains(body, 'note.youdao.com/s/')
+
+石墨文档泄漏:
+  dsl:
+  - contains(body, 'shimo.im/docs/')
+
+金山文档泄漏:
+  dsl:
+  - contains(body, 'kdocs.cn/l/')
+
+问卷星泄漏:
+  dsl:
+  - contains(body, 'www.wjx.cn/')
+
+腾讯问卷泄漏:
+  dsl:
+  - contains(body, 'wj.qq.com/s')
+
+内网地址泄漏:
+  dsl:
+  - regex(body, '[^0-9]((10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3}))')
+
+系统绝对路径泄漏:
+  dsl:
+  - regex(body, '[A-Z]{1}[:]{1}[\\]{1}[a-zA-Z0-9._-]{2,}[\\]{1}[a-zA-Z0-9._-]*')
+
+Linux私钥泄漏:
+  dsl:
+  - regex(body, '[-]+BEGIN [^\s]+ PRIVATE KEY[-]')
+
+SQL语法报错:
+  dsl:
+  - contains(body, 'java.sql.SQLSyntaxErrorException')
+  - contains(body, 'java.sql.SQLException')
+  - contains(body, 'System.Data.SqlClient.SqlException')
+  - contains(body, 'System.Data.SqlClient.SqlConnection.OnError')
+  - contains(body, '[SqlException（0x80131904）')
+  - contains(body, 'SQLHelper.TSQLExecuteDataTable')
+  - contains(body, '在将 nvarchar 值')
+  - contains(body, 'SQL 命令未正确结束')
+  - contains(body, 'SQL Execute Error')
+  - contains(body, 'You have an error in your SQL syntax')
+  - contains(body, '无法执行 SQL 语句')
+  - contains(body, 'ORA-00911')
+  - contains(body, 'MySQL server error report')
+  - contains(body, 'MySQL Error')
+  - contains(body, 'XPATH syntax error')
+  - contains(body, '选择列表中的列 ')
+  - contains(body, '因为该列没有包含在聚合函数或 GROUP BY 子句中')
+  - contains(body, 'Microsoft OLE DB Provider for ODBC Drivers')
+  - contains(body, '[Microsoft][ODBC SQL Server Driver][SQL Server]')
+
+/etc/passwd泄漏:
+  dsl:
+  - contains(body, 'root:*:0:0:')
+  - contains(body, 'root:x:0:0')
+  - contains(body, 'root:/root:/bin/bash')
+  - contains(body, 'bin:x:1:1:bin:/bin')
+  - contains(body, 'nobody:x:99:99')
+
+可疑错误:
+  dsl:
+  - contains(body, '系统发生未知错误')
+
+/etc/shadow泄露:
+  dsl:
+  - regex(body, '^[^:]+:[^:]*:[0-9]*:*[0-9]*:[0-9]*:[0-9]*:::')
