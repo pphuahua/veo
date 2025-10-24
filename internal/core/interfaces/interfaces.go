@@ -47,10 +47,11 @@ type HTTPResponse struct {
 	RequestHeaders  map[string][]string `json:"request_headers"`  // 请求头信息
 	Server          string              `json:"server"`           // 服务器信息
 	IsDirectory     bool                `json:"is_directory"`     // 是否为目录
-	Length          int64               `json:"length"`           // 内容长度（报告用）
-	Duration        int64               `json:"duration"`         // 请求耗时（毫秒）
-	Depth           int                 `json:"depth"`            // 扫描深度
-	ResponseBody    string              `json:"response_body"`    // 响应体内容（报告用）
+	Length          int64               `json:"length"`                // 内容长度（报告用）
+	Duration        int64               `json:"duration"`              // 请求耗时（毫秒）
+	Depth           int                 `json:"depth"`                 // 扫描深度
+	ResponseBody    string              `json:"response_body"`         // 响应体内容（报告用）
+	Fingerprints    []FingerprintMatch  `json:"fingerprints,omitempty"` // 匹配到的指纹信息
 }
 
 // FilterResult 过滤结果结构体

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
@@ -585,29 +586,35 @@ func (rf *ResponseFilter) printPrimaryFilteredPages(pages []interfaces.HTTPRespo
 
 // printValidPages 打印最终有效页面（支持指纹识别）
 func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
-	for _, page := range pages {
-		// 基础信息
+	for idx := range pages {
+		page := &pages[idx]
+
 		baseInfo := fmt.Sprintf("%s %s %s %s %s",
-			formatURL(page.URL), // 使用绿色格式显示URL，与指纹识别模块保持一致
+			formatURL(page.URL),
 			formatStatusCode(page.StatusCode),
 			formatTitle(page.Title),
 			formatContentLength(int(page.ContentLength)),
 			formatContentType(page.ContentType),
 		)
 
-		// 尝试进行指纹识别
-		fingerprintInfo := ""
 		rf.mu.RLock()
 		hasEngine := rf.fingerprintEngine != nil
 		rf.mu.RUnlock()
 
+		var (
+			matches        []interfaces.FingerprintMatch
+			fingerprintStr string
+		)
+
 		if hasEngine {
-			fingerprintInfo = rf.performFingerprintRecognition(&page)
+			matches, fingerprintStr = rf.performFingerprintRecognition(page)
+			if len(matches) > 0 {
+				page.Fingerprints = matches
+			}
 		}
 
-		// 输出（如果有指纹信息则追加）
-		if fingerprintInfo != "" {
-			logger.Infof("%s %s", baseInfo, fingerprintInfo)
+		if fingerprintStr != "" {
+			logger.Infof("%s %s", baseInfo, fingerprintStr)
 		} else {
 			logger.Infof("%s", baseInfo)
 		}
@@ -615,9 +622,9 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 }
 
 // performFingerprintRecognition 对单个响应执行指纹识别
-func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPResponse) string {
+func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPResponse) ([]interfaces.FingerprintMatch, string) {
 	if page == nil {
-		return ""
+		return nil, ""
 	}
 
 	rf.mu.RLock()
@@ -626,7 +633,7 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 
 	if engine == nil {
 		logger.Debugf("指纹引擎为nil，跳过识别")
-		return ""
+		return nil, ""
 	}
 
 	// 使用反射调用指纹引擎的方法（避免循环依赖）
@@ -636,14 +643,14 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	method := engineValue.MethodByName("AnalyzeResponseWithClientSilent")
 	if !method.IsValid() {
 		logger.Debugf("指纹引擎没有 AnalyzeResponseWithClientSilent 方法")
-		return ""
+		return nil, ""
 	}
 
 	// 转换响应格式
 	fpResponse := rf.convertToFingerprintResponse(page)
 	if fpResponse == nil {
 		logger.Debugf("响应转换失败: %s", page.URL)
-		return ""
+		return nil, ""
 	}
 
 	logger.Debugf("开始识别: %s", page.URL)
@@ -660,7 +667,7 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	// 检查返回值
 	if len(results) == 0 {
 		logger.Debugf("方法调用无返回值")
-		return ""
+		return nil, ""
 	}
 
 	matchesInterface := results[0].Interface()
@@ -669,13 +676,15 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 	matchesValue := reflect.ValueOf(matchesInterface)
 	if matchesValue.Kind() != reflect.Slice {
 		logger.Debugf("返回值不是切片类型: %v", matchesValue.Kind())
-		return ""
+		return nil, ""
 	}
 
 	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, matchesValue.Len())
 
+	convertedMatches := rf.convertMatchesToInterfaces(matchesValue)
+
 	// 格式化指纹信息
-	return rf.formatFingerprintMatches(matchesInterface)
+	return convertedMatches, rf.formatFingerprintMatches(matchesInterface)
 }
 
 // convertToFingerprintResponse 将interfaces.HTTPResponse转换为fingerprint.HTTPResponse
@@ -771,6 +780,61 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 
 	logger.Debugf("成功创建类型: %v", newResp.Type())
 	return newResp.Interface()
+}
+
+func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value) []interfaces.FingerprintMatch {
+	count := matchesValue.Len()
+	if count == 0 {
+		return nil
+	}
+
+	results := make([]interfaces.FingerprintMatch, 0, count)
+	for i := 0; i < count; i++ {
+		item := matchesValue.Index(i)
+		if !item.IsValid() {
+			continue
+		}
+		if item.Kind() == reflect.Pointer {
+			if item.IsNil() {
+				continue
+			}
+			item = item.Elem()
+		}
+		if item.Kind() != reflect.Struct {
+			continue
+		}
+
+		match := interfaces.FingerprintMatch{}
+
+		if field := item.FieldByName("URL"); field.IsValid() && field.Kind() == reflect.String {
+			match.URL = field.String()
+		}
+		if field := item.FieldByName("RuleName"); field.IsValid() && field.Kind() == reflect.String {
+			match.RuleName = field.String()
+		}
+		if field := item.FieldByName("DSLMatched"); field.IsValid() && field.Kind() == reflect.String {
+			match.Matcher = field.String()
+		}
+		if field := item.FieldByName("Confidence"); field.IsValid() && field.CanFloat() {
+			match.Confidence = field.Float()
+		}
+		if field := item.FieldByName("Timestamp"); field.IsValid() {
+			switch field.Kind() {
+			case reflect.Int, reflect.Int64, reflect.Int32:
+				match.Timestamp = field.Int()
+			case reflect.Struct:
+				if field.Type().String() == "time.Time" {
+					if t, ok := field.Interface().(time.Time); ok {
+						match.Timestamp = t.Unix()
+					}
+				}
+			}
+		}
+
+		results = append(results, match)
+	}
+
+	return results
 }
 
 // formatFingerprintMatches 格式化指纹匹配结果（使用反射避免循环依赖）

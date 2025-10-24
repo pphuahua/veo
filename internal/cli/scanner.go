@@ -94,6 +94,7 @@ type ScanController struct {
 	probedMutex       sync.RWMutex                   // 探测缓存锁
 	progressTracker   *FingerprintProgressTracker    // 指纹识别进度跟踪器
 	statsDisplay      *stats.StatsDisplay            // 统计显示器
+	lastTargets       []string                       // 最近解析的目标列表
 }
 
 // NewScanController 创建扫描控制器
@@ -207,6 +208,7 @@ func (sc *ScanController) runActiveMode() error {
 	if err != nil {
 		return fmt.Errorf("目标解析失败: %v", err)
 	}
+	sc.lastTargets = targets
 
 	logger.Debugf("解析到 %d 个目标", len(targets))
 
@@ -711,6 +713,9 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 				Duration:        resp.Duration,
 				IsDirectory:     false,
 			}
+			if converted := convertFingerprintMatches(matches); len(converted) > 0 {
+				httpResp.Fingerprints = converted
+			}
 			allResults = append(allResults, httpResp)
 
 			logger.Debugf("%s 指纹识别完成，匹配数量: %d", target, len(matches))
@@ -769,6 +774,9 @@ func (sc *ScanController) processSingleTargetFingerprint(target string) []interf
 			Server:          resp.Server,
 			Duration:        resp.Duration,
 			IsDirectory:     false,
+		}
+		if converted := convertFingerprintMatches(matches); len(converted) > 0 {
+			httpResp.Fingerprints = converted
 		}
 		results = append(results, httpResp)
 
@@ -879,9 +887,20 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 
 	// 准备扫描参数
 	scanParams := map[string]interface{}{
-		"threads": sc.args.Threads,
-		"timeout": sc.args.Timeout,
-		"retry":   sc.args.Retry,
+		"threads":                   sc.args.Threads,
+		"timeout":                   sc.args.Timeout,
+		"retry":                     sc.args.Retry,
+		"dir_targets_count":         0,
+		"fingerprint_targets_count": 0,
+		"fingerprint_rules_loaded":  0,
+	}
+
+	if sc.args.HasModule("dirscan") {
+		scanParams["dir_targets_count"] = len(sc.lastTargets)
+	}
+
+	if sc.args.HasModule("finger") {
+		scanParams["fingerprint_targets_count"] = len(sc.lastTargets)
 	}
 
 	// 检查是否为指纹识别模式
@@ -896,12 +915,14 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 		// 获取指纹匹配结果和统计信息
 		matches := sc.fingerprintEngine.GetMatches()
 		stats := sc.fingerprintEngine.GetStats()
+		if stats != nil {
+			scanParams["fingerprint_rules_loaded"] = stats.RulesLoaded
+		}
 
-		// 添加指纹识别特定参数
-		scanParams["rules_loaded"] = stats.RulesLoaded
+		fingerprintResponses := filterResult.ValidPages
 
 		// 生成指纹识别JSON报告
-		return report.GenerateCustomJSONFingerprintReport(matches, stats, target, scanParams, outputPath)
+		return report.GenerateCustomJSONFingerprintReport(fingerprintResponses, matches, stats, target, scanParams, outputPath)
 	} else {
 		// 目录扫描JSON报告
 		// 添加目录扫描特定参数
@@ -912,7 +933,7 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 		}
 
 		// 生成目录扫描JSON报告
-		return report.GenerateCustomJSONDirscanReport(filterResult, target, scanParams, outputPath)
+		return report.GenerateCustomJSONDirscanReport(filterResult.ValidPages, target, scanParams, outputPath)
 	}
 }
 
@@ -1129,6 +1150,30 @@ func (sc *ScanController) extractTitleFromHTML(body string) string {
 		return title
 	}
 	return ""
+}
+
+func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch) []interfaces.FingerprintMatch {
+	if len(matches) == 0 {
+		return nil
+	}
+
+	converted := make([]interfaces.FingerprintMatch, 0, len(matches))
+	for _, match := range matches {
+		if match == nil {
+			continue
+		}
+
+		timestamp := match.Timestamp.Unix()
+		converted = append(converted, interfaces.FingerprintMatch{
+			URL:        match.URL,
+			RuleName:   match.RuleName,
+			Matcher:    match.DSLMatched,
+			Confidence: match.Confidence,
+			Timestamp:  timestamp,
+		})
+	}
+
+	return converted
 }
 
 // performPathProbing 执行path字段主动探测（复用被动模式逻辑）

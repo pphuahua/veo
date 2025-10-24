@@ -584,6 +584,25 @@ const htmlTemplate = `<!DOCTYPE html>
                                         </div>
                                     </div>
 
+                                    <!-- 指纹匹配 -->
+                                    {{if $result.Fingerprints}}
+                                    <div>
+                                        <h4 class="text-sm font-medium text-gray-900 mb-2">指纹匹配</h4>
+                                        <div class="bg-white border border-gray-200 rounded p-2 max-h-32 overflow-y-auto">
+                                            <ul class="code-block text-gray-700 space-y-1">
+                                                {{range $fp := $result.Fingerprints}}
+                                                <li>
+                                                    <span class="font-medium text-gray-800">{{$fp.RuleName}}</span>
+                                                    {{if $fp.Matcher}}
+                                                        <span class="text-gray-500">（{{$fp.Matcher}}）</span>
+                                                    {{end}}
+                                                </li>
+                                                {{end}}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    {{end}}
+
                                     <!-- 响应体 -->
                                     {{if $result.ResponseBody}}
                                     <div class="col-span-2">

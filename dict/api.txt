@@ -264,6 +264,7 @@
 /attachments
 /media
 /images
+/image/
 /assets
 /static
 /resources
@@ -413,9 +414,11 @@
 /beans
 /mappings
 /dump
+/fonts
 /struts
 /action
 /shiro-cas
+/ui
 /api/v1/
 /api/values
 /api/weatherforecast
