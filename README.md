@@ -96,22 +96,6 @@ addon:
 - `threads`：最大并发数。
 - `max_response_body_size`：响应体限制大小（防止内存占用过大）。
 
-### 2.4 字典配置
-
-```yaml
- content:
-    files_dict: true
-    common_dict: true
-    api_dict: true
-    common: "dict/common.txt"
-    api: "dict/api.txt"
-    files: "dict/files.txt"
-```
-
-- `files_dict`：文件字典，用来扫描根目录文件泄露，只扫描根目录。
-- `common_dict`：通用字典，每层目录都进行扫描。
-- `api_dict`：api字典，每层目录都进行扫描。
-
 ---
 ## 3. 目录扫描无效页面过滤逻辑
 
