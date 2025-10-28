@@ -137,7 +137,7 @@ https://github.com/Nuclei-Template-Hub/VEO-Fingerprint
 ### 4.1 安装依赖
 确保 `go.mod` 中引用本仓库：
 ```bash
-go get github.com/your-org/veo/pkg/sdk/scan
+go get github.com/pphuahua/veo/pkg/sdk/scan
 ```
 
 ### 4.2 代码示例
