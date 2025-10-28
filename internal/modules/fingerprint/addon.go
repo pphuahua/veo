@@ -125,8 +125,8 @@ func (fa *FingerprintAddon) Response(f *proxy.Flow) {
 
 	logger.Debugf("开始分析响应: %s", response.URL)
 
-	// 执行指纹识别
-	matches := fa.engine.AnalyzeResponse(response)
+    // 执行指纹识别（与主动模式保持一致，支持icon()等需要HTTP客户端的DSL特性）
+    matches := fa.engine.AnalyzeResponseWithClient(response, fa.httpClient)
 
 	// [重要] 主动探测触发逻辑
 	if fa.httpClient != nil {

@@ -829,20 +829,32 @@ func applyArgsToConfig(args *CLIArgs) {
 		}
 	}
 
-	// 新增：处理状态码过滤参数
-	var customFilterConfig *filter.FilterConfig
+    // 新增：处理状态码过滤参数
+    // 目标：统一主动/被动两种模式对状态码来源的处理逻辑
+    // 1) 设置全局 ResponseFilter 的有效状态码（影响目录扫描结果过滤）
+    // 2) 同步覆盖被动模式 URL 采集器（Collector）的状态码白名单
+    var customFilterConfig *filter.FilterConfig
 
-	if args.StatusCodes != "" {
-		statusCodes, err := parseStatusCodes(args.StatusCodes)
-		if err != nil {
-			logger.Errorf("状态码过滤参数处理失败: %v", err)
-		} else if len(statusCodes) > 0 {
-			logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
-			customFilterConfig = filter.DefaultFilterConfig()
-			customFilterConfig.ValidStatusCodes = statusCodes
-			logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
-		}
-	}
+    if args.StatusCodes != "" {
+        statusCodes, err := parseStatusCodes(args.StatusCodes)
+        if err != nil {
+            logger.Errorf("状态码过滤参数处理失败: %v", err)
+        } else if len(statusCodes) > 0 {
+            logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
+
+            // 1) 覆盖全局过滤配置（供 ResponseFilter 使用）
+            customFilterConfig = filter.DefaultFilterConfig()
+            customFilterConfig.ValidStatusCodes = statusCodes
+            logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
+
+            // 2) 覆盖被动模式 Collector 的采集状态码白名单
+            collectorCfg := config.GetCollectorConfig()
+            if collectorCfg != nil {
+                collectorCfg.GenerationStatusCodes = statusCodes
+                logger.Infof("CLI参数覆盖：被动采集状态码白名单设置为 %v", statusCodes)
+            }
+        }
+    }
 
 	if args.FilterTolerance != -1 {
 		if customFilterConfig == nil {
@@ -938,15 +950,18 @@ func startApplication(args *CLIArgs) error {
 
 	// 启动指纹识别模块
     if args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
-		// 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
-		fingerprint.SetGlobalAddon(app.fingerprintAddon)
-		app.fingerprintAddon.Enable()
+        // 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
+        fingerprint.SetGlobalAddon(app.fingerprintAddon)
+        app.fingerprintAddon.Enable()
 
-		// 将指纹识别addon添加到代理服务器
-		app.proxy.AddAddon(app.fingerprintAddon)
-		logger.Debug("指纹识别addon已添加到代理服务器")
-		logger.Debug("指纹识别模块启动成功")
-	}
+        // 使 -vv 在被动模式下生效：控制片段输出
+        app.fingerprintAddon.EnableSnippet(args.VeryVerbose)
+
+        // 将指纹识别addon添加到代理服务器
+        app.proxy.AddAddon(app.fingerprintAddon)
+        logger.Debug("指纹识别addon已添加到代理服务器")
+        logger.Debug("指纹识别模块启动成功")
+    }
 
 	// 启动目录扫描模块
     if args.HasModule(string(modulepkg.ModuleDirscan)) && app.dirscanModule != nil {
