@@ -1,13 +1,13 @@
 package dirscan
 
 import (
+	"bufio"
+	"fmt"
+	"os"
 	"veo/internal/core/console"
 	"veo/internal/utils/collector"
 	"veo/internal/utils/generator"
 	"veo/proxy"
-	"bufio"
-	"fmt"
-	"os"
 
 	"veo/internal/core/logger"
 )
@@ -24,6 +24,22 @@ type DirscanAddon struct {
 	consoleManager *console.ConsoleManager
 	enabled        bool
 	status         ScanStatus
+}
+
+type staticCollector struct {
+	urls map[string]int
+}
+
+func (sc *staticCollector) GetURLMap() map[string]int {
+	result := make(map[string]int, len(sc.urls))
+	for k, v := range sc.urls {
+		result[k] = v
+	}
+	return result
+}
+
+func (sc *staticCollector) GetURLCount() int {
+	return len(sc.urls)
 }
 
 // NewDirscanAddon 创建目录扫描插件
@@ -135,7 +151,8 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	defer da.collector.EnableCollection()
 
 	// 执行扫描
-	result, err := da.engine.PerformScan(da.collector)
+	collectorWrapper := &staticCollector{urls: urlMap}
+	result, err := da.engine.PerformScan(collectorWrapper)
 	if err != nil {
 		da.status = StatusError
 		return nil, err

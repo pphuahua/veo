@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"veo/internal/utils/formatter"
 
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/gologger/levels"
@@ -14,10 +15,10 @@ import (
 // veo日志系统 - gologger兼容层
 // ===========================================
 
-// AdventureFormatter veo自定义日志格式化器
+// Formatter veo自定义日志格式化器
 // 由于gologger的API限制，我们使用一个简化的方法来实现自定义格式
 // 通过重写日志输出方法来实现veo原有的简洁格式
-type AdventureFormatter struct {
+type Formatter struct {
 	EnableColors bool
 }
 
@@ -27,15 +28,15 @@ type LogConfig struct {
 	ColorOutput bool   `yaml:"color_output"` // 彩色输出
 }
 
-// AdventureLogger veo日志封装器
+// Logger veo日志封装器
 // 提供与logrus兼容的API，底层使用gologger实现
-type AdventureLogger struct {
+type Logger struct {
 	config       *LogConfig
 	currentLevel levels.Level // 添加当前级别跟踪
 }
 
 // 全局日志实例
-var globalLogger *AdventureLogger
+var globalLogger *Logger
 
 // ===========================================
 // 初始化和配置
@@ -53,7 +54,7 @@ func InitializeLogger(config *LogConfig) error {
 	}
 
 	// 创建全局日志实例
-	globalLogger = &AdventureLogger{
+	globalLogger = &Logger{
 		config:       config,
 		currentLevel: parseLogLevel(config.Level),
 	}
@@ -103,6 +104,9 @@ func parseLogLevel(levelStr string) levels.Level {
 
 // shouldUseColors 检查是否应该使用颜色
 func shouldUseColors() bool {
+	if !formatter.ColorsEnabled() {
+		return false
+	}
 	if runtime.GOOS == "windows" {
 		// Windows 10+默认支持ANSI颜色
 		return true
@@ -123,59 +127,59 @@ func getDefaultLogConfig() *LogConfig {
 // ===========================================
 
 // Info 信息级别日志
-func (l *AdventureLogger) Info(args ...interface{}) {
+func (l *Logger) Info(args ...interface{}) {
 	l.printWithFormat(levels.LevelInfo, fmt.Sprint(args...))
 }
 
 // Infof 格式化信息级别日志
-func (l *AdventureLogger) Infof(format string, args ...interface{}) {
+func (l *Logger) Infof(format string, args ...interface{}) {
 	l.printWithFormat(levels.LevelInfo, fmt.Sprintf(format, args...))
 }
 
 // Debug 调试级别日志
-func (l *AdventureLogger) Debug(args ...interface{}) {
+func (l *Logger) Debug(args ...interface{}) {
 	l.printWithFormat(levels.LevelDebug, fmt.Sprint(args...))
 }
 
 // Debugf 格式化调试级别日志
-func (l *AdventureLogger) Debugf(format string, args ...interface{}) {
+func (l *Logger) Debugf(format string, args ...interface{}) {
 	l.printWithFormat(levels.LevelDebug, fmt.Sprintf(format, args...))
 }
 
 // Error 错误级别日志
-func (l *AdventureLogger) Error(args ...interface{}) {
+func (l *Logger) Error(args ...interface{}) {
 	l.printWithFormat(levels.LevelError, fmt.Sprint(args...))
 }
 
 // Errorf 格式化错误级别日志
-func (l *AdventureLogger) Errorf(format string, args ...interface{}) {
+func (l *Logger) Errorf(format string, args ...interface{}) {
 	l.printWithFormat(levels.LevelError, fmt.Sprintf(format, args...))
 }
 
 // Warn 警告级别日志
-func (l *AdventureLogger) Warn(args ...interface{}) {
+func (l *Logger) Warn(args ...interface{}) {
 	l.printWithFormat(levels.LevelWarning, fmt.Sprint(args...))
 }
 
 // Warnf 格式化警告级别日志
-func (l *AdventureLogger) Warnf(format string, args ...interface{}) {
+func (l *Logger) Warnf(format string, args ...interface{}) {
 	l.printWithFormat(levels.LevelWarning, fmt.Sprintf(format, args...))
 }
 
 // Fatal 致命错误日志
-func (l *AdventureLogger) Fatal(args ...interface{}) {
+func (l *Logger) Fatal(args ...interface{}) {
 	l.printWithFormat(levels.LevelFatal, fmt.Sprint(args...))
 	os.Exit(1)
 }
 
 // Fatalf 格式化致命错误日志
-func (l *AdventureLogger) Fatalf(format string, args ...interface{}) {
+func (l *Logger) Fatalf(format string, args ...interface{}) {
 	l.printWithFormat(levels.LevelFatal, fmt.Sprintf(format, args...))
 	os.Exit(1)
 }
 
 // printWithFormat 使用veo自定义格式打印日志
-func (l *AdventureLogger) printWithFormat(level levels.Level, message string) {
+func (l *Logger) printWithFormat(level levels.Level, message string) {
 	// 关键修复：添加级别检查，确保级别过滤正常工作
 	if level > l.currentLevel {
 		return // 不输出超过当前最大级别的日志
@@ -248,7 +252,7 @@ func Info(args ...interface{}) {
 		globalLogger.Info(args...)
 	} else {
 		// 使用默认配置创建临时logger
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Info(args...)
 	}
 }
@@ -258,7 +262,7 @@ func Infof(format string, args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Infof(format, args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Infof(format, args...)
 	}
 }
@@ -268,7 +272,7 @@ func Debug(args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Debug(args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Debug(args...)
 	}
 }
@@ -278,7 +282,7 @@ func Debugf(format string, args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Debugf(format, args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Debugf(format, args...)
 	}
 }
@@ -288,7 +292,7 @@ func Error(args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Error(args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Error(args...)
 	}
 }
@@ -298,7 +302,7 @@ func Errorf(format string, args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Errorf(format, args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Errorf(format, args...)
 	}
 }
@@ -308,7 +312,7 @@ func Warn(args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Warn(args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Warn(args...)
 	}
 }
@@ -318,7 +322,7 @@ func Warnf(format string, args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Warnf(format, args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Warnf(format, args...)
 	}
 }
@@ -328,7 +332,7 @@ func Fatal(args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Fatal(args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Fatal(args...)
 	}
 }
@@ -338,7 +342,7 @@ func Fatalf(format string, args ...interface{}) {
 	if globalLogger != nil {
 		globalLogger.Fatalf(format, args...)
 	} else {
-		defaultLogger := &AdventureLogger{config: getDefaultLogConfig()}
+		defaultLogger := &Logger{config: getDefaultLogConfig()}
 		defaultLogger.Fatalf(format, args...)
 	}
 }
@@ -348,7 +352,7 @@ func Fatalf(format string, args ...interface{}) {
 // ===========================================
 
 // GetGlobalLogger 获取全局日志实例
-func GetGlobalLogger() *AdventureLogger {
+func GetGlobalLogger() *Logger {
 	return globalLogger
 }
 
@@ -360,6 +364,13 @@ func SetLogLevel(levelStr string) {
 	// 同时更新全局logger的当前级别
 	if globalLogger != nil {
 		globalLogger.currentLevel = level
+	}
+}
+
+// SetColorOutput 设置日志颜色输出开关
+func SetColorOutput(enabled bool) {
+	if globalLogger != nil && globalLogger.config != nil {
+		globalLogger.config.ColorOutput = enabled
 	}
 }
 

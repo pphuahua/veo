@@ -15,7 +15,7 @@ import (
 	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
-	"veo/internal/core/module"
+	modulepkg "veo/internal/core/module"
 	"veo/internal/modules/fingerprint"
 	report "veo/internal/modules/reporter"
 	"veo/internal/utils/batch"
@@ -39,19 +39,24 @@ type FingerprintProgressTracker struct {
 	currentStep int    // 当前步骤
 	baseURL     string // 基础URL
 	mu          sync.Mutex
+	enabled     bool
 }
 
 // NewFingerprintProgressTracker 创建指纹识别进度跟踪器
-func NewFingerprintProgressTracker(baseURL string, pathRulesCount int) *FingerprintProgressTracker {
+func NewFingerprintProgressTracker(baseURL string, pathRulesCount int, enabled bool) *FingerprintProgressTracker {
 	return &FingerprintProgressTracker{
 		totalSteps:  1 + pathRulesCount, // 1个基础指纹匹配 + N个path探测
 		currentStep: 0,
 		baseURL:     baseURL,
+		enabled:     enabled,
 	}
 }
 
 // UpdateProgress 更新进度并显示
 func (fpt *FingerprintProgressTracker) UpdateProgress(stepName string) {
+	if !fpt.enabled {
+		return
+	}
 	fpt.mu.Lock()
 	defer fpt.mu.Unlock()
 
@@ -226,26 +231,34 @@ func (sc *ScanController) runActiveMode() error {
 
 	// 创建结果收集器
 	var allResults []interfaces.HTTPResponse
+	var dirscanResults []interfaces.HTTPResponse
+	var fingerprintResults []interfaces.HTTPResponse
 
 	// [重要] 顺序执行各个模块，避免模块上下文冲突
 	// 优化执行顺序：指纹识别优先，然后目录扫描
 	orderedModules := sc.getOptimizedModuleOrder()
 
-	for i, module := range orderedModules {
-		logger.Debugf("开始执行模块: %s (%d/%d)", module, i+1, len(orderedModules))
+	for i, moduleName := range orderedModules {
+		logger.Debugf("开始执行模块: %s (%d/%d)", moduleName, i+1, len(orderedModules))
 
-		moduleResults, err := sc.runModuleForTargets(module, targets)
+		moduleResults, err := sc.runModuleForTargets(moduleName, targets)
 		if err != nil {
-			logger.Errorf("模块 %s 执行失败: %v", module, err)
+			logger.Errorf("模块 %s 执行失败: %v", moduleName, err)
 			continue
 		}
 
 		// 合并结果
 		allResults = append(allResults, moduleResults...)
-		logger.Debugf("模块 %s 完成，获得 %d 个结果", module, len(moduleResults))
+		switch moduleName {
+		case string(modulepkg.ModuleDirscan):
+			dirscanResults = append(dirscanResults, moduleResults...)
+		case string(modulepkg.ModuleFinger):
+			fingerprintResults = append(fingerprintResults, moduleResults...)
+		}
+		logger.Debugf("模块 %s 完成，获得 %d 个结果", moduleName, len(moduleResults))
 
 		// 在模块执行之间添加分隔（混合模式）
-		if len(orderedModules) > 1 && i < len(orderedModules)-1 {
+		if len(orderedModules) > 1 && i < len(orderedModules)-1 && !sc.args.JSONOutput {
 			fmt.Println() // 添加空行分隔
 		}
 	}
@@ -262,8 +275,12 @@ func (sc *ScanController) runActiveMode() error {
 	if onlyFingerprint {
 		// 指纹识别模块不需要Filter处理，直接使用原始结果
 		logger.Debugf("指纹识别模块跳过Filter处理")
+		pages := fingerprintResults
+		if len(pages) == 0 {
+			pages = allResults
+		}
 		filterResult = &interfaces.FilterResult{
-			ValidPages: allResults,
+			ValidPages: pages,
 		}
 	} else {
 		// [修改] 目录扫描模块已在各目标扫描时独立应用过滤器
@@ -302,6 +319,16 @@ func (sc *ScanController) runActiveMode() error {
 		sc.statsDisplay.Disable()
 	}
 
+	if sc.args.JSONOutput {
+		jsonStr, err := sc.generateConsoleJSON(dirscanResults, fingerprintResults, filterResult)
+		if err != nil {
+			logger.Errorf("生成JSON输出失败: %v", err)
+		} else {
+			fmt.Println(jsonStr)
+		}
+		return nil
+	}
+
 	return nil
 }
 
@@ -316,6 +343,49 @@ func (sc *ScanController) runPassiveMode() error {
 	// 直接返回，让主函数处理被动模式
 	// 这样可以保持与现有代码100%兼容
 	return nil
+}
+
+func (sc *ScanController) buildScanParams() map[string]interface{} {
+	params := map[string]interface{}{
+		"threads":                   sc.args.Threads,
+		"timeout":                   sc.args.Timeout,
+		"retry":                     sc.args.Retry,
+		"dir_targets_count":         0,
+		"fingerprint_targets_count": 0,
+		"fingerprint_rules_loaded":  0,
+	}
+
+	if sc.args.HasModule(string(modulepkg.ModuleDirscan)) {
+		params["dir_targets_count"] = len(sc.lastTargets)
+	}
+
+	if sc.args.HasModule(string(modulepkg.ModuleFinger)) {
+		params["fingerprint_targets_count"] = len(sc.lastTargets)
+	}
+
+	if sc.fingerprintEngine != nil {
+		if stats := sc.fingerprintEngine.GetStats(); stats != nil {
+			params["fingerprint_rules_loaded"] = stats.RulesLoaded
+		}
+	}
+
+	return params
+}
+
+func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
+	var matches []*fingerprint.FingerprintMatch
+	var stats *fingerprint.Statistics
+	if sc.fingerprintEngine != nil {
+		matches = sc.fingerprintEngine.GetMatches()
+		stats = sc.fingerprintEngine.GetStats()
+	}
+
+	if len(fingerprintPages) == 0 && sc.args.HasModule(string(modulepkg.ModuleFinger)) {
+		fingerprintPages = filterResult.ValidPages
+	}
+
+	params := sc.buildScanParams()
+	return report.GenerateCombinedJSON(dirPages, fingerprintPages, matches, stats, params)
 }
 
 // parseTargets 解析目标列表（支持命令行参数和文件输入）
@@ -684,7 +754,7 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 
 	for _, target := range targets {
 		// 为每个目标创建进度跟踪器
-		sc.progressTracker = NewFingerprintProgressTracker(target, pathRulesCount)
+		sc.progressTracker = NewFingerprintProgressTracker(target, pathRulesCount, !sc.args.JSONOutput)
 
 		responses := sc.requestProcessor.ProcessURLs([]string{target})
 
@@ -896,10 +966,10 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 func determineExcelReportType(modules []string) report.ExcelReportType {
 	var hasDirscan, hasFingerprint bool
 	for _, moduleName := range modules {
-		if moduleName == string(module.ModuleDirscan) {
+		if moduleName == string(modulepkg.ModuleDirscan) {
 			hasDirscan = true
 		}
-		if moduleName == string(module.ModuleFinger) {
+		if moduleName == string(modulepkg.ModuleFinger) {
 			hasFingerprint = true
 		}
 	}
@@ -919,22 +989,7 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 	logger.Debugf("开始生成JSON报告到: %s", outputPath)
 
 	// 准备扫描参数
-	scanParams := map[string]interface{}{
-		"threads":                   sc.args.Threads,
-		"timeout":                   sc.args.Timeout,
-		"retry":                     sc.args.Retry,
-		"dir_targets_count":         0,
-		"fingerprint_targets_count": 0,
-		"fingerprint_rules_loaded":  0,
-	}
-
-	if sc.args.HasModule("dirscan") {
-		scanParams["dir_targets_count"] = len(sc.lastTargets)
-	}
-
-	if sc.args.HasModule("finger") {
-		scanParams["fingerprint_targets_count"] = len(sc.lastTargets)
-	}
+	scanParams := sc.buildScanParams()
 
 	// 检查是否为指纹识别模式
 	onlyFingerprint := len(sc.args.Modules) == 1 && sc.args.Modules[0] == "finger"

@@ -13,13 +13,13 @@ import (
 	"veo/internal/modules/fingerprint"
 )
 
-type sdkResult struct {
-	Summary            sdkSummary      `json:"summary"`
-	DirscanResults     []sdkPageResult `json:"dirscan_results,omitempty"`
-	FingerprintTargets []sdkPageResult `json:"fingerprint_targets,omitempty"`
+type SDKResult struct {
+	Summary            SDKSummary      `json:"summary"`
+	DirscanResults     []SDKPageResult `json:"dirscan_results,omitempty"`
+	FingerprintTargets []SDKPageResult `json:"fingerprint_targets,omitempty"`
 }
 
-type sdkSummary struct {
+type SDKSummary struct {
 	Total                   int   `json:"total"`
 	DirscanCount            int   `json:"dirscan_count"`
 	FingerprintCount        int   `json:"fingerprint_count"`
@@ -29,17 +29,17 @@ type sdkSummary struct {
 	FingerprintTargetsCount int   `json:"fingerprint_targets_count"`
 }
 
-type sdkPageResult struct {
+type SDKPageResult struct {
 	URL           string                      `json:"url"`
 	StatusCode    int                         `json:"status_code"`
 	Title         string                      `json:"title"`
 	ContentLength int64                       `json:"content_length"`
 	DurationMs    int64                       `json:"duration_ms"`
 	ContentType   string                      `json:"content_type,omitempty"`
-	Fingerprints  []sdkFingerprintMatchOutput `json:"fingerprints,omitempty"`
+	Fingerprints  []SDKFingerprintMatchOutput `json:"fingerprints,omitempty"`
 }
 
-type sdkFingerprintMatchOutput struct {
+type SDKFingerprintMatchOutput struct {
 	RuleName    string `json:"rule_name"`
 	RuleContent string `json:"rule_content,omitempty"`
 	Snippet     string `json:"snippet,omitempty"`
@@ -80,7 +80,7 @@ func (jrg *JSONReportGenerator) GenerateFingerprintReport(responses []interfaces
 }
 
 // saveSDKResult 保存与SDK一致的JSON报告
-func (jrg *JSONReportGenerator) saveSDKResult(result *sdkResult, target string, scanType string) (string, error) {
+func (jrg *JSONReportGenerator) saveSDKResult(result *SDKResult, target string, scanType string) (string, error) {
 	if result == nil {
 		return "", fmt.Errorf("报告数据为空")
 	}
@@ -143,6 +143,16 @@ func GenerateCustomJSONFingerprintReport(responses []interfaces.HTTPResponse, ma
 	return generator.GenerateFingerprintReport(responses, matches, stats, target, scanParams)
 }
 
+func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, scanParams map[string]interface{}) (string, error) {
+	generator := NewJSONReportGenerator()
+	result := generator.buildSDKResult(dirPages, fingerprintPages, matches, stats, scanParams)
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("JSON序列化失败: %v", err)
+	}
+	return string(data), nil
+}
+
 // extractResponses 提取过滤结果中的有效页面
 func extractResponses(filterResult *interfaces.FilterResult) []interfaces.HTTPResponse {
 	if filterResult == nil {
@@ -160,13 +170,13 @@ func extractResponses(filterResult *interfaces.FilterResult) []interfaces.HTTPRe
 }
 
 // buildSDKResult 根据输入数据构建与SDK一致的结果结构
-func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, scanParams map[string]interface{}) *sdkResult {
+func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, scanParams map[string]interface{}) *SDKResult {
 	dirResults := makeDirscanPageResults(dirPages)
 	fpResults := makeFingerprintPageResults(fpPages, matches)
 
 	duration := time.Since(jrg.startTime).Milliseconds()
 
-	summary := sdkSummary{
+	summary := SDKSummary{
 		Total:                   len(dirResults) + len(fpResults),
 		DirscanCount:            len(dirResults),
 		FingerprintCount:        len(fpResults),
@@ -176,7 +186,7 @@ func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPRespons
 		FingerprintTargetsCount: intFromParams(scanParams, "fingerprint_targets_count", len(fpResults)),
 	}
 
-	return &sdkResult{
+	return &SDKResult{
 		Summary:            summary,
 		DirscanResults:     dirResults,
 		FingerprintTargets: fpResults,
@@ -184,19 +194,19 @@ func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPRespons
 }
 
 // makeDirscanPageResults 构造目录扫描结果列表
-func makeDirscanPageResults(pages []interfaces.HTTPResponse) []sdkPageResult {
+func makeDirscanPageResults(pages []interfaces.HTTPResponse) []SDKPageResult {
 	if len(pages) == 0 {
 		return nil
 	}
 
-	results := make([]sdkPageResult, 0, len(pages))
+	results := make([]SDKPageResult, 0, len(pages))
 	for _, page := range pages {
 		length := page.ContentLength
 		if length == 0 {
 			length = page.Length
 		}
 
-		results = append(results, sdkPageResult{
+		results = append(results, SDKPageResult{
 			URL:           page.URL,
 			StatusCode:    page.StatusCode,
 			Title:         page.Title,
@@ -211,13 +221,13 @@ func makeDirscanPageResults(pages []interfaces.HTTPResponse) []sdkPageResult {
 }
 
 // makeFingerprintPageResults 构造指纹识别结果列表
-func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch) []sdkPageResult {
+func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch) []SDKPageResult {
 	if len(pages) == 0 && len(matches) == 0 {
 		return nil
 	}
 
 	matchMap := groupMatchesByURL(matches)
-	results := make([]sdkPageResult, 0, len(pages)+len(matchMap))
+	results := make([]SDKPageResult, 0, len(pages)+len(matchMap))
 	seen := make(map[string]bool, len(pages))
 
 	for _, page := range pages {
@@ -231,7 +241,7 @@ func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fing
 		if len(fps) > 0 {
 			existing = mergeFingerprintOutputs(existing, fps)
 		}
-		results = append(results, sdkPageResult{
+		results = append(results, SDKPageResult{
 			URL:           page.URL,
 			StatusCode:    page.StatusCode,
 			Title:         page.Title,
@@ -251,7 +261,7 @@ func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fing
 		if len(fps) == 0 {
 			continue
 		}
-		results = append(results, sdkPageResult{
+		results = append(results, SDKPageResult{
 			URL:          url,
 			Fingerprints: fps,
 		})
@@ -261,18 +271,18 @@ func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fing
 }
 
 // groupMatchesByURL 将指纹匹配结果按URL分组
-func groupMatchesByURL(matches []*fingerprint.FingerprintMatch) map[string][]sdkFingerprintMatchOutput {
+func groupMatchesByURL(matches []*fingerprint.FingerprintMatch) map[string][]SDKFingerprintMatchOutput {
 	if len(matches) == 0 {
 		return nil
 	}
 
-	grouped := make(map[string][]sdkFingerprintMatchOutput)
+	grouped := make(map[string][]SDKFingerprintMatchOutput)
 	for _, match := range matches {
 		if match == nil {
 			continue
 		}
 		url := match.URL
-		grouped[url] = append(grouped[url], sdkFingerprintMatchOutput{
+		grouped[url] = append(grouped[url], SDKFingerprintMatchOutput{
 			RuleName:    match.RuleName,
 			RuleContent: match.DSLMatched,
 			Snippet:     match.Snippet,
@@ -281,14 +291,14 @@ func groupMatchesByURL(matches []*fingerprint.FingerprintMatch) map[string][]sdk
 	return grouped
 }
 
-func toSDKMatchesFromInterfaces(matches []interfaces.FingerprintMatch) []sdkFingerprintMatchOutput {
+func toSDKMatchesFromInterfaces(matches []interfaces.FingerprintMatch) []SDKFingerprintMatchOutput {
 	if len(matches) == 0 {
 		return nil
 	}
 
-	outputs := make([]sdkFingerprintMatchOutput, 0, len(matches))
+	outputs := make([]SDKFingerprintMatchOutput, 0, len(matches))
 	for _, match := range matches {
-		outputs = append(outputs, sdkFingerprintMatchOutput{
+		outputs = append(outputs, SDKFingerprintMatchOutput{
 			RuleName:    match.RuleName,
 			RuleContent: match.Matcher,
 			Snippet:     match.Snippet,
@@ -298,13 +308,13 @@ func toSDKMatchesFromInterfaces(matches []interfaces.FingerprintMatch) []sdkFing
 	return outputs
 }
 
-func mergeFingerprintOutputs(base []sdkFingerprintMatchOutput, extra []sdkFingerprintMatchOutput) []sdkFingerprintMatchOutput {
+func mergeFingerprintOutputs(base []SDKFingerprintMatchOutput, extra []SDKFingerprintMatchOutput) []SDKFingerprintMatchOutput {
 	if len(extra) == 0 {
 		return base
 	}
 
 	if len(base) == 0 {
-		merged := make([]sdkFingerprintMatchOutput, len(extra))
+		merged := make([]SDKFingerprintMatchOutput, len(extra))
 		copy(merged, extra)
 		return merged
 	}

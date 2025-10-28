@@ -15,7 +15,7 @@ import (
 	"veo/internal/core/config"
 	"veo/internal/core/console"
 	"veo/internal/core/logger"
-	"veo/internal/core/module"
+	modulepkg "veo/internal/core/module"
 	"veo/internal/modules/authlearning"
 	"veo/internal/modules/dirscan"
 	"veo/internal/modules/fingerprint"
@@ -60,6 +60,10 @@ type CLIArgs struct {
 	// 新增：实时统计显示参数
 	Stats bool // 启用实时扫描进度统计显示 (--stats)
 
+	// 输出控制
+	NoColor    bool // 禁用彩色输出 (-nc)
+	JSONOutput bool // 控制台输出JSON结果 (--json)
+
 	// 指纹细节输出开关
 	VeryVerbose bool // 指纹匹配内容展示开关 (-vv)
 
@@ -74,7 +78,7 @@ type CLIArgs struct {
 }
 
 // ValidModules 有效的模块列表（使用module包的类型定义）
-var ValidModules = []string{string(module.ModuleFinger), string(module.ModuleDirscan)}
+var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
 
 // CLIApp CLI应用程序
 type CLIApp struct {
@@ -172,6 +176,8 @@ func ParseCLIArgs() *CLIArgs {
 		// 新增：实时统计显示参数
 		stats       = flag.Bool("stats", false, "启用实时扫描进度统计显示")
 		veryVerbose = flag.Bool("vv", false, "控制指纹匹配内容展示开关 (默认关闭，可使用 --vv 开启)")
+		noColor     = flag.Bool("nc", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
+		jsonOutput  = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
 
 		// 新增：状态码过滤参数
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
@@ -213,6 +219,8 @@ func ParseCLIArgs() *CLIArgs {
 		Output:      getStringValue(*output, *outputLong),
 		Stats:       *stats,
 		VeryVerbose: *veryVerbose,
+		NoColor:     *noColor,
+		JSONOutput:  *jsonOutput,
 
 		// 新增：HTTP认证头部参数
 		Headers: []string(headers),
@@ -234,8 +242,12 @@ func ParseCLIArgs() *CLIArgs {
 
 	// [新增] 如果未指定模块，使用默认模块
 	if len(args.Modules) == 0 {
-		args.Modules = []string{string(module.ModuleFinger), string(module.ModuleDirscan)}
-		logger.Debugf("未指定模块，使用默认模块: %s, %s", module.ModuleFinger, module.ModuleDirscan)
+	args.Modules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
+	logger.Debugf("未指定模块，使用默认模块: %s, %s", modulepkg.ModuleFinger, modulepkg.ModuleDirscan)
+	}
+
+	if args.JSONOutput {
+		args.Stats = false
 	}
 
 	// 验证参数
@@ -701,7 +713,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 	var consoleManager *console.ConsoleManager
 	var dirscanModule *dirscan.DirscanModule
 
-	if args.HasModule(string(module.ModuleDirscan)) {
+    if args.HasModule(string(modulepkg.ModuleDirscan)) {
 		logger.Debug("启用目录扫描模块，创建相关组件...")
 
 		// 创建collector
@@ -724,7 +736,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 
 	// 创建指纹识别插件（如果启用）
 	var fingerprintAddon *fingerprint.FingerprintAddon
-	if args.HasModule(string(module.ModuleFinger)) {
+    if args.HasModule(string(modulepkg.ModuleFinger)) {
 		logger.Debug("创建指纹识别插件...")
 		fingerprintAddon, err = createFingerprintAddon()
 		if err != nil {
@@ -777,6 +789,16 @@ func applyArgsToConfig(args *CLIArgs) {
 		logger.Debug("调试模式已启用，显示所有级别日志")
 	} else {
 		logger.SetLogLevel("info")
+	}
+
+	if args.NoColor {
+		formatter.SetColorEnabled(false)
+		logger.SetColorOutput(false)
+		os.Setenv("NO_COLOR", "1")
+	}
+
+	if args.JSONOutput && !args.Debug {
+		logger.SetLogLevel("error")
 	}
 
 	// 应用新的CLI参数到配置
@@ -915,7 +937,7 @@ func startApplication(args *CLIArgs) error {
 	logger.Debug("开始启动指定的模块...")
 
 	// 启动指纹识别模块
-	if args.HasModule(string(module.ModuleFinger)) && app.fingerprintAddon != nil {
+    if args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
 		// 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
 		fingerprint.SetGlobalAddon(app.fingerprintAddon)
 		app.fingerprintAddon.Enable()
@@ -927,7 +949,7 @@ func startApplication(args *CLIArgs) error {
 	}
 
 	// 启动目录扫描模块
-	if args.HasModule(string(module.ModuleDirscan)) && app.dirscanModule != nil {
+    if args.HasModule(string(modulepkg.ModuleDirscan)) && app.dirscanModule != nil {
 		if err := app.dirscanModule.Start(); err != nil {
 			logger.Errorf("启动目录扫描模块失败: %v", err)
 		} else {
@@ -957,8 +979,8 @@ func displayStartupInfo(args *CLIArgs) {
 
 `)
 	logger.Debugf("模块状态:")
-	logger.Debugf("指纹识别: %s\n", getModuleStatus(args.HasModule(string(module.ModuleFinger))))
-	logger.Debugf("目录扫描: %s\n", getModuleStatus(args.HasModule(string(module.ModuleDirscan))))
+    logger.Debugf("指纹识别: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleFinger))))
+    logger.Debugf("目录扫描: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleDirscan))))
 }
 
 // StartProxy 启动代理服务器
@@ -974,12 +996,12 @@ func (app *CLIApp) StartProxy() error {
 	}
 
 	// 只在启用目录扫描模块时添加collector
-	if app.args.HasModule(string(module.ModuleDirscan)) && app.collector != nil {
+    if app.args.HasModule(string(modulepkg.ModuleDirscan)) && app.collector != nil {
 		app.proxy.AddAddon(app.collector)
 	}
 
 	// 根据启用的模块添加插件
-	if app.args.HasModule(string(module.ModuleFinger)) && app.fingerprintAddon != nil {
+    if app.args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
 		app.proxy.AddAddon(app.fingerprintAddon)
 	}
 

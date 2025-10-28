@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -233,6 +234,9 @@ func FormatFingerprintMatch(fingerprintName string) string {
 // shouldUseColors 检查是否应该使用颜色
 // 返回: 布尔值表示是否使用颜色（配置允许且平台支持）
 func shouldUseColors() bool {
+	if atomic.LoadInt32(&globalColorEnabled) == 0 {
+		return false
+	}
 	// Windows系统检查ANSI支持状态
 	if runtime.GOOS == "windows" {
 		return isWindowsANSISupported()
@@ -252,7 +256,10 @@ func isWindowsANSISupported() bool {
 }
 
 // Windows ANSI状态变量，由console包设置
-var windowsANSISupported bool
+var (
+	windowsANSISupported bool
+	globalColorEnabled   int32 = 1
+)
 
 // SetWindowsANSISupported 设置Windows ANSI支持状态
 // 此函数由console包调用，用于通知formatter包Windows ANSI支持状态
@@ -266,6 +273,20 @@ func SetWindowsANSISupported(supported bool) {
 // 返回: Windows ANSI支持状态
 func getWindowsANSIStatus() bool {
 	return windowsANSISupported
+}
+
+// SetColorEnabled 控制全局颜色输出
+func SetColorEnabled(enabled bool) {
+	if enabled {
+		atomic.StoreInt32(&globalColorEnabled, 1)
+	} else {
+		atomic.StoreInt32(&globalColorEnabled, 0)
+	}
+}
+
+// ColorsEnabled 返回当前颜色输出状态
+func ColorsEnabled() bool {
+	return atomic.LoadInt32(&globalColorEnabled) == 1
 }
 
 // getPurpleBlueColor 获取紫蓝色颜色代码（支持降级）
