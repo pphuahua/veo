@@ -3364,3 +3364,11 @@ Zimbra邮件管理系统:
 浙大恩特客户资源管理系统:
   dsl:
     - "contains(body, 'entsoft_en','LoginDoAction.entcrm','杭州恩软','Ent.base.js')"
+
+指挥调度平台:
+  dsl:
+    - "contains(body, '执法视音频综合管理平台','PMedia Platform Software','index.php?r=site/login','app/structure/departments.php','指挥调度管理平台')"
+
+H3C-iMC智能管理中心:
+  dsl:
+    - "contains(body, '/selfservice/preregister','mainForm:ifCheckCode','loginRegisterContent','/selfservice/index.xhtml')"

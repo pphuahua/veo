@@ -217,7 +217,7 @@ asp-webshell:
 
 jsp-webshell:
   dsl:
-  - regex(body, '(?i)(ClassLoader|exec|eval|ProcessBuilder|getInputStream|loadClass|defineClass|URLClassLoader)\(')
+  - regex(body, '(?i)(ClassLoader|ProcessBuilder|getInputStream|loadClass|defineClass|URLClassLoader)\(')
   - regex(body, '(?i)cmd.exe')
   - regex(body, '(?i)/bin/sh')
   - regex(body, '(?i)/bin/bash')
@@ -225,7 +225,7 @@ jsp-webshell:
 
 php-webshell:
   dsl:
-  - regex(body, '(?i)\b(passthru|eval|exec|system|phpinfo|assert|call_user_func|call_user_func_array)\(')
+  - regex(body, '(?i)\b(passthru|phpinfo|call_user_func|call_user_func_array)\(')
   - regex(body, '(?i)cmd.exe')
   - regex(body, '(?i)/bin/sh')
   - regex(body, '(?i)/bin/bash')
