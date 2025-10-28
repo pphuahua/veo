@@ -23,14 +23,19 @@ type DirscanModule struct {
 
 // NewDirscanModule 创建目录扫描模块
 func NewDirscanModule(consoleManager *console.ConsoleManager) (*DirscanModule, error) {
-	// 使用dirscan模块的SDK接口
-	addon, err := CreateDefaultAddon()
-	if err != nil {
-		return nil, err
-	}
+    // 使用dirscan模块的SDK接口
+    addon, err := CreateDefaultAddon()
+    if err != nil {
+        return nil, err
+    }
 
-	// 设置控制台管理器
-	addon.SetConsoleManager(consoleManager)
+    // 设置控制台管理器
+    addon.SetConsoleManager(consoleManager)
+
+    // 注入与代理服务器一致的Collector实例，避免采集与扫描使用不同实例
+    if consoleManager != nil && consoleManager.GetCollector() != nil {
+        addon.SetCollector(consoleManager.GetCollector())
+    }
 
 	module := &DirscanModule{
 		addon:  addon,

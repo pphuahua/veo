@@ -18,12 +18,12 @@ import (
 
 // DirscanAddon 目录扫描插件
 type DirscanAddon struct {
-	proxy.BaseAddon
-	engine         *Engine
-	collector      *collector.Collector
-	consoleManager *console.ConsoleManager
-	enabled        bool
-	status         ScanStatus
+    proxy.BaseAddon
+    engine         *Engine
+    collector      *collector.Collector
+    consoleManager *console.ConsoleManager
+    enabled        bool
+    status         ScanStatus
 }
 
 type staticCollector struct {
@@ -183,7 +183,26 @@ func (da *DirscanAddon) GetConsoleManager() *console.ConsoleManager {
 
 // GetCollector 获取collector（用于依赖注入）
 func (da *DirscanAddon) GetCollector() *collector.Collector {
-	return da.collector
+    return da.collector
+}
+
+// SetCollector 注入外部的URL采集器实例，确保与代理侧使用同一实例
+//
+// 参数:
+//   - c: *collector.Collector 外部创建并用于代理拦截的URL采集器
+// 返回:
+//   - 无
+//
+// 说明:
+//   - 在被动代理模式下，代理服务器会将经过的URL写入其注册的Collector实例。
+//     若目录扫描插件内部持有不同的Collector实例，将导致“按回车触发扫描”时取不到已采集的URL。
+//     通过本方法将外部Collector注入到插件中，可确保两端使用同一个实例，避免“没有收集到URL”的问题。
+func (da *DirscanAddon) SetCollector(c *collector.Collector) {
+    if c == nil {
+        return
+    }
+    da.collector = c
+    logger.Debug("目录扫描插件Collector已注入为外部实例")
 }
 
 // ===========================================
