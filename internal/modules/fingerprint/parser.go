@@ -8,6 +8,8 @@ import (
 	"veo/internal/core/logger"
 )
 
+var snippetWhitespaceRegex = regexp.MustCompile(`\s+`)
+
 // ===========================================
 // DSL解析器实现
 // ===========================================
@@ -371,6 +373,169 @@ func (p *DSLParser) cleanQuotes(s string) string {
 		}
 	}
 	return s
+}
+
+// ExtractSnippet 根据DSL提取匹配内容片段
+func (p *DSLParser) ExtractSnippet(dsl string, ctx *DSLContext) string {
+	if ctx == nil {
+		return ""
+	}
+
+	expr := strings.TrimSpace(dsl)
+	if expr == "" {
+		return ""
+	}
+
+	if (strings.HasPrefix(expr, "\"") && strings.HasSuffix(expr, "\"")) ||
+		(strings.HasPrefix(expr, "'") && strings.HasSuffix(expr, "'")) {
+		expr = expr[1 : len(expr)-1]
+	}
+
+	lower := strings.ToLower(expr)
+	switch {
+	case strings.HasPrefix(lower, "contains(") && strings.HasSuffix(expr, ")"):
+		content := expr[len("contains(") : len(expr)-1]
+		params := p.parseParameters(content)
+		if len(params) < 2 {
+			return ""
+		}
+		source := strings.TrimSpace(params[0])
+		target := p.getTargetBySource(source, ctx)
+		if target == "" {
+			return ""
+		}
+		targetLower := strings.ToLower(target)
+		for i := 1; i < len(params); i++ {
+			search := p.cleanQuotes(strings.TrimSpace(params[i]))
+			if search == "" {
+				continue
+			}
+			index := strings.Index(targetLower, strings.ToLower(search))
+			if index == -1 {
+				continue
+			}
+			return p.buildSnippet(target, index, index+len(search))
+		}
+	case strings.HasPrefix(lower, "contains_all(") && strings.HasSuffix(expr, ")"):
+		content := expr[len("contains_all(") : len(expr)-1]
+		params := p.parseParameters(content)
+		if len(params) < 2 {
+			return ""
+		}
+		source := strings.TrimSpace(params[0])
+		target := p.getTargetBySource(source, ctx)
+		if target == "" {
+			return ""
+		}
+		targetLower := strings.ToLower(target)
+		for i := 1; i < len(params); i++ {
+			search := p.cleanQuotes(strings.TrimSpace(params[i]))
+			if search == "" {
+				continue
+			}
+			index := strings.Index(targetLower, strings.ToLower(search))
+			if index == -1 {
+				continue
+			}
+			snippet := p.buildSnippet(target, index, index+len(search))
+			if snippet != "" {
+				return snippet
+			}
+		}
+	case strings.HasPrefix(lower, "regex(") && strings.HasSuffix(expr, ")"):
+		content := expr[len("regex(") : len(expr)-1]
+		params := p.parseParameters(content)
+		var target string
+		var pattern string
+		if len(params) >= 2 {
+			source := strings.TrimSpace(params[0])
+			target = p.getTargetBySource(source, ctx)
+			pattern = p.cleanQuotes(strings.TrimSpace(params[1]))
+		} else if len(params) == 1 {
+			target = ctx.Body
+			pattern = p.cleanQuotes(strings.TrimSpace(params[0]))
+		}
+		if target == "" || pattern == "" {
+			return ""
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return ""
+		}
+		loc := re.FindStringIndex(target)
+		if loc == nil {
+			return ""
+		}
+		return p.buildSnippet(target, loc[0], loc[1])
+	}
+
+	return ""
+}
+
+func (p *DSLParser) getTargetBySource(source string, ctx *DSLContext) string {
+	if ctx == nil {
+		return ""
+	}
+	src := strings.ToLower(strings.TrimSpace(p.cleanQuotes(source)))
+	switch src {
+	case "header", "headers":
+		return p.headersToString(ctx.Headers)
+	case "title":
+		if ctx.Response != nil {
+			return ctx.Response.Title
+		}
+		return ""
+	case "server":
+		if ctx.Response != nil {
+			return ctx.Response.Server
+		}
+		return ""
+	case "url":
+		return ctx.URL
+	case "method":
+		return ctx.Method
+	default:
+		return ctx.Body
+	}
+}
+
+func (p *DSLParser) buildSnippet(content string, start, end int) string {
+	if start < 0 || end <= start || start >= len(content) {
+		return ""
+	}
+	if end > len(content) {
+		end = len(content)
+	}
+
+	before := start - 100
+	if before < 0 {
+		before = 0
+	}
+	after := end + 100
+	if after > len(content) {
+		after = len(content)
+	}
+
+	var builder strings.Builder
+	if before > 0 {
+		builder.WriteString("...")
+	}
+	builder.WriteString(content[before:start])
+	builder.WriteString(content[start:end])
+	builder.WriteString(content[end:after])
+	if after < len(content) {
+		builder.WriteString("...")
+	}
+
+	return normalizeSnippet(builder.String())
+}
+
+func normalizeSnippet(snippet string) string {
+	snippet = strings.ReplaceAll(snippet, "\r\n", " ")
+	snippet = strings.ReplaceAll(snippet, "\n", " ")
+	snippet = strings.ReplaceAll(snippet, "\t", " ")
+	snippet = snippetWhitespaceRegex.ReplaceAllString(snippet, " ")
+	return strings.TrimSpace(snippet)
 }
 
 // headersToString 将headers转换为字符串

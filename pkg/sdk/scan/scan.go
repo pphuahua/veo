@@ -65,6 +65,7 @@ type FingerprintConfig struct {
 	LogMatches      bool
 	LogLevel        string
 	Filters         *FingerprintFilterOptions
+	ShowSnippet     *bool
 }
 
 // FingerprintFilterOptions 控制指纹识别的过滤行为。
@@ -119,6 +120,7 @@ func defaultFingerprintConfig() *FingerprintConfig {
 		EnableFiltering: true,
 		MaxBodySize:     1 * 1024 * 1024,
 		LogMatches:      true,
+		ShowSnippet:     boolPtr(true),
 	}
 }
 
@@ -155,6 +157,7 @@ type PageResult struct {
 type FingerprintMatchOutput struct {
 	RuleName    string `json:"rule_name"`
 	RuleContent string `json:"rule_content,omitempty"`
+	Snippet     string `json:"snippet,omitempty"`
 }
 
 // Run 执行扫描并返回结构化结果。
@@ -384,11 +387,17 @@ func fingerprintMatches(engine *fingerprintinternal.Engine, resp *fingerprintint
 		return nil
 	}
 
+	includeSnippet := engine.IsSnippetEnabled()
 	outputs := make([]FingerprintMatchOutput, 0, len(matches))
 	for _, match := range matches {
+		snippet := ""
+		if includeSnippet {
+			snippet = match.Snippet
+		}
 		outputs = append(outputs, FingerprintMatchOutput{
 			RuleName:    match.RuleName,
 			RuleContent: match.DSLMatched,
+			Snippet:     snippet,
 		})
 	}
 
@@ -591,6 +600,12 @@ func createFingerprintEngine(cfg *FingerprintConfig) (*fingerprintinternal.Engin
 	}
 
 	applyFingerprintFilters(engine, config.Filters)
+
+	snippetEnabled := true
+	if config.ShowSnippet != nil {
+		snippetEnabled = *config.ShowSnippet
+	}
+	engine.EnableSnippet(snippetEnabled)
 	return engine, nil
 }
 
@@ -722,6 +737,7 @@ func cloneFingerprintConfig(cfg *FingerprintConfig) *FingerprintConfig {
 	}
 
 	copyCfg := *source
+	copyCfg.ShowSnippet = cloneBoolPtr(source.ShowSnippet)
 	if source.Filters != nil {
 		filterCopy := *source.Filters
 		filterCopy.ContentTypes = cloneStringSlice(source.Filters.ContentTypes)

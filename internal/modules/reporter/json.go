@@ -42,6 +42,7 @@ type sdkPageResult struct {
 type sdkFingerprintMatchOutput struct {
 	RuleName    string `json:"rule_name"`
 	RuleContent string `json:"rule_content,omitempty"`
+	Snippet     string `json:"snippet,omitempty"`
 }
 
 // JSONReportGenerator JSON报告生成器
@@ -274,6 +275,7 @@ func groupMatchesByURL(matches []*fingerprint.FingerprintMatch) map[string][]sdk
 		grouped[url] = append(grouped[url], sdkFingerprintMatchOutput{
 			RuleName:    match.RuleName,
 			RuleContent: match.DSLMatched,
+			Snippet:     match.Snippet,
 		})
 	}
 	return grouped
@@ -289,6 +291,7 @@ func toSDKMatchesFromInterfaces(matches []interfaces.FingerprintMatch) []sdkFing
 		outputs = append(outputs, sdkFingerprintMatchOutput{
 			RuleName:    match.RuleName,
 			RuleContent: match.Matcher,
+			Snippet:     match.Snippet,
 		})
 	}
 
@@ -308,12 +311,12 @@ func mergeFingerprintOutputs(base []sdkFingerprintMatchOutput, extra []sdkFinger
 
 	existing := make(map[string]struct{}, len(base))
 	for _, item := range base {
-		key := item.RuleName + "|" + item.RuleContent
+		key := item.RuleName + "|" + item.RuleContent + "|" + item.Snippet
 		existing[key] = struct{}{}
 	}
 
 	for _, item := range extra {
-		key := item.RuleName + "|" + item.RuleContent
+		key := item.RuleName + "|" + item.RuleContent + "|" + item.Snippet
 		if _, ok := existing[key]; ok {
 			continue
 		}

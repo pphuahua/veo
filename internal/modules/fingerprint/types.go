@@ -25,12 +25,12 @@ type FingerprintRule struct {
 
 // FingerprintMatch 指纹匹配结果
 type FingerprintMatch struct {
-	URL        string    `json:"url"`         // 匹配的URL
-	RuleName   string    `json:"rule_name"`   // 匹配的规则名称
-	Technology string    `json:"technology"`  // 识别的技术栈
-	DSLMatched string    `json:"dsl_matched"` // 匹配的DSL表达式
-	Confidence float64   `json:"confidence"`  // 匹配置信度 (0.0 - 1.0)
-	Timestamp  time.Time `json:"timestamp"`   // 匹配时间
+	URL        string    `json:"url"`               // 匹配的URL
+	RuleName   string    `json:"rule_name"`         // 匹配的规则名称
+	Technology string    `json:"technology"`        // 识别的技术栈
+	DSLMatched string    `json:"dsl_matched"`       // 匹配的DSL表达式
+	Timestamp  time.Time `json:"timestamp"`         // 匹配时间
+	Snippet    string    `json:"snippet,omitempty"` // 匹配内容片段
 }
 
 // HTTPResponse 响应数据结构（简化版，独立于其他模块）
@@ -71,6 +71,7 @@ type Engine struct {
 	staticContentTypes       []string
 	staticFileFilterEnabled  bool
 	contentTypeFilterEnabled bool
+	showSnippet              bool
 }
 
 // Statistics 统计信息

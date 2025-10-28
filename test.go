@@ -28,8 +28,8 @@ func main() {
 	autoSkip := true
 
 	cfg := &scan.Config{
-		DirTargets:         []string{"http://221.214.214.36/"},
-		FingerprintTargets: []string{"http://221.214.214.36/"},
+		DirTargets:         []string{"http://223.99.206.205:8201/gmvcs/uap/"},
+		FingerprintTargets: []string{"http://223.99.206.205:8201/gmvcs/uap/"},
 		SkipTLSVerify:      false,
 		AutoSkipTLSForIP:   &autoSkip,
 		HTTPTimeout:        20 * time.Second,

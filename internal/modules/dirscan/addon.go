@@ -122,8 +122,8 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	}
 
 	// 检查是否有收集到的URL
-	urlCount := da.collector.GetURLCount()
-	if urlCount == 0 {
+	urlMap := da.collector.GetURLMap()
+	if len(urlMap) == 0 {
 		return nil, fmt.Errorf("没有收集到URL，无法开始扫描")
 	}
 

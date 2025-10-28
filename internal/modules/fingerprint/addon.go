@@ -35,12 +35,12 @@ type FingerprintAddon struct {
 }
 
 // NewFingerprintAddon 创建指纹识别插件
-func NewFingerprintAddon(config *EngineConfig) (*FingerprintAddon, error) {
+func NewFingerprintAddon(engineConfig *EngineConfig) (*FingerprintAddon, error) {
 	// 创建引擎
-	engine := NewEngine(config)
+	engine := NewEngine(engineConfig)
 
 	// 加载规则
-	if err := engine.LoadRules(config.RulesPath); err != nil {
+	if err := engine.LoadRules(engineConfig.RulesPath); err != nil {
 		return nil, err
 	}
 
@@ -52,6 +52,7 @@ func NewFingerprintAddon(config *EngineConfig) (*FingerprintAddon, error) {
 		encodingDetector: GetEncodingDetector(),  // 初始化编码检测器
 		entityDecoder:    GetHTMLEntityDecoder(), // 初始化HTML实体解码器
 	}
+
 	return addon, nil
 }
 
@@ -247,6 +248,13 @@ func (fa *FingerprintAddon) shouldSkipResponse(f *proxy.Flow) bool {
 func (fa *FingerprintAddon) SetHTTPClient(client interface{}) {
 	fa.httpClient = client
 	logger.Debug("HTTP客户端已设置，支持主动探测")
+}
+
+// EnableSnippet 控制指纹结果是否输出匹配片段
+func (fa *FingerprintAddon) EnableSnippet(enabled bool) {
+	if fa.engine != nil {
+		fa.engine.EnableSnippet(enabled)
+	}
 }
 
 // Enable 启用指纹识别

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -175,6 +176,16 @@ func FormatDSLRule(dslRule string) string {
 	}
 	// DSL规则使用灰色显示，不过于突出
 	return ColorDim + dslRule + ColorReset
+}
+
+// FormatFingerprintPair 将指纹名称与匹配规则格式化为 "<名称> <规则>" 的统一输出
+func FormatFingerprintPair(name, rule string) string {
+	name = strings.TrimSpace(name)
+	rule = strings.TrimSpace(rule)
+	if name == "" || rule == "" {
+		return ""
+	}
+	return "<" + FormatFingerprintName(name) + "> <" + FormatDSLRule(rule) + ">"
 }
 
 // FormatFingerprintTag 格式化指纹标签显示（指纹识别专用）
@@ -358,6 +369,44 @@ func FormatDSL(dsl string) string {
 	}
 	// 使用灰色显示DSL表达式
 	return ColorGray + dsl + ColorReset
+}
+
+var quotedValueRegexp = regexp.MustCompile(`['"]([^'"` + "`" + `]+)['"]`)
+
+// HighlightSnippet 根据匹配DSL中的字符串常量，对片段中的关键字进行高亮显示
+func HighlightSnippet(snippet, matcher string) string {
+	snippet = strings.TrimSpace(snippet)
+	if snippet == "" {
+		return ""
+	}
+
+	if !shouldUseColors() {
+		return snippet
+	}
+
+	values := quotedValueRegexp.FindAllStringSubmatch(matcher, -1)
+	if len(values) == 0 {
+		return snippet
+	}
+
+	highlighted := snippet
+	seen := make(map[string]struct{})
+	for _, match := range values {
+		if len(match) < 2 {
+			continue
+		}
+		value := strings.TrimSpace(match[1])
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		highlight := ColorYellow + value + ColorReset
+		highlighted = strings.ReplaceAll(highlighted, value, highlight)
+	}
+	return highlighted
 }
 
 // ============================================================================

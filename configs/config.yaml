@@ -73,19 +73,6 @@ hosts:
     - "*.github.io"
 
 addon:
-  filter:
-    enable: true
-    hash: true
-    ValidStatusCodes:
-      - 200
-      - 401
-      - 403
-      - 405
-      - 302
-      - 301
-      - 500
-    filter_tolerance: 50  # 相似页面过滤容错阈值（字节），0表示禁用容错过滤
-
   collector:
     GenerationStatusCodes:
       - 200
@@ -191,14 +178,6 @@ addon:
     user_agents:
       - 
 
-  content:
-    files_dict: true
-    common_dict: true
-    api_dict: true
-    common: "dict/common.txt"
-    api: "dict/api.txt"
-    files: "dict/files.txt"
-
   proxy:
     # HTTP代理: http://proxy:port 或 http://user:pass@proxy:port
     # HTTPS代理: https://proxy:port 或 https://user:pass@proxy:port
@@ -208,12 +187,3 @@ addon:
     ssl_insecure: true
     connect_timeout: 15
     read_timeout: 15
-
-  # 报告配置
-  report:
-    max_bodysize: 1000             # 响应体内容最大显示字符数
-
-# 日志控制配置
-log:
-  level: info           # 日志级别: debug, info, warn, error, fatal
-  color_output: true    # 启用彩色输出（Windows ANSI支持）

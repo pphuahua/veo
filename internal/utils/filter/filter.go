@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	"veo/internal/utils/filter/strategy"
@@ -112,7 +111,8 @@ type ResponseFilter struct {
 	mu                sync.RWMutex                       // 读写锁
 
 	// [新增] 可选的指纹识别引擎（用于目录扫描结果的二次识别）
-	fingerprintEngine interface{}
+	fingerprintEngine      interface{}
+	showFingerprintSnippet bool
 }
 
 // NewResponseFilter 创建新的响应过滤器
@@ -152,6 +152,12 @@ func (rf *ResponseFilter) SetFingerprintEngine(engine interface{}) {
 	defer rf.mu.Unlock()
 	rf.fingerprintEngine = engine
 	logger.Debug("响应过滤器已设置指纹识别引擎，启用二次识别")
+}
+
+func (rf *ResponseFilter) EnableFingerprintSnippet(enabled bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.showFingerprintSnippet = enabled
 }
 
 // FilterResponses 过滤响应列表
@@ -350,78 +356,12 @@ func (rf *ResponseFilter) GetPageHashCount() int {
 }
 
 // ============================================================================
-// 配置适配器功能 (原config_adapter.go内容)
-// ============================================================================
-
-// ConfigAdapter 配置适配器，用于从外部config包转换配置
-type ConfigAdapter struct{}
-
-// NewConfigAdapter 创建配置适配器
-func NewConfigAdapter() *ConfigAdapter {
-	return &ConfigAdapter{}
-}
-
-// FromExternalConfig 从外部配置转换为内部配置
-func (ca *ConfigAdapter) FromExternalConfig() *FilterConfig {
-	externalConfig := config.GetFilterConfig()
-
-	// 转换为内部配置格式
-	validStatusCodes := externalConfig.ValidStatusCodes
-	if len(validStatusCodes) == 0 {
-		validStatusCodes = []int{200, 403, 500, 302, 301, 405} // 默认状态码
-	}
-
-	// 获取相似页面过滤容错阈值（从CLI参数或配置文件）
-	// 注意：0值表示禁用容错过滤，是有效值
-	// 配置文件中的默认值是50（见configs/config.yaml）
-	filterTolerance := externalConfig.FilterTolerance
-
-	return &FilterConfig{
-		ValidStatusCodes:        validStatusCodes,
-		InvalidPageThreshold:    3,    // 从外部配置获取或使用默认值
-		SecondaryThreshold:      1,    // 从外部配置获取或使用默认值
-		EnableStatusFilter:      true, // 从外部配置获取或使用默认值
-		EnableInvalidPageFilter: true, // 从外部配置获取或使用默认值
-		EnableSecondaryFilter:   true, // 从外部配置获取或使用默认值
-
-		// Content-Type过滤配置（使用默认值，因为外部配置暂未支持）
-		EnableContentTypeFilter: true,
-		FilteredContentTypes: []string{
-			"image/png",
-			"image/jpeg",
-			"image/jpg",
-			"image/gif",
-			"image/webp",
-			"image/svg+xml",
-			"image/bmp",
-			"image/ico",
-			"image/tiff",
-		},
-
-		// 相似页面过滤容错阈值配置
-		FilterTolerance: filterTolerance,
-	}
-}
-
-// ToExternalConfig 将内部配置转换为外部配置格式（如果需要）
-func (ca *ConfigAdapter) ToExternalConfig(internalConfig *FilterConfig) map[string]interface{} {
-	return map[string]interface{}{
-		"valid_status_codes":         internalConfig.ValidStatusCodes,
-		"invalid_page_threshold":     internalConfig.InvalidPageThreshold,
-		"secondary_threshold":        internalConfig.SecondaryThreshold,
-		"enable_status_filter":       internalConfig.EnableStatusFilter,
-		"enable_invalid_page_filter": internalConfig.EnableInvalidPageFilter,
-		"enable_secondary_filter":    internalConfig.EnableSecondaryFilter,
-	}
-}
-
 // CreateFilterConfigFromExternal 便捷方法：从外部配置创建过滤器配置
 func CreateFilterConfigFromExternal() *FilterConfig {
 	if cfg := getGlobalFilterConfig(); cfg != nil {
 		return cfg
 	}
-	adapter := NewConfigAdapter()
-	return adapter.FromExternalConfig()
+	return DefaultFilterConfig()
 }
 
 // ============================================================================
@@ -482,8 +422,9 @@ func checkContentTypeAgainstRules(contentType string, filteredTypes []string) bo
 
 // CreateResponseFilterFromExternal 便捷方法：从外部配置创建响应过滤器
 func CreateResponseFilterFromExternal() *ResponseFilter {
-	config := CreateFilterConfigFromExternal()
-	return NewResponseFilter(config)
+	filterCfg := CreateFilterConfigFromExternal()
+	responseFilter := NewResponseFilter(filterCfg)
+	return responseFilter
 }
 
 // ============================================================================
@@ -613,11 +554,39 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 			}
 		}
 
+		var messageBuilder strings.Builder
+		messageBuilder.WriteString(baseInfo)
 		if fingerprintStr != "" {
-			logger.Infof("%s %s", baseInfo, fingerprintStr)
-		} else {
-			logger.Infof("%s", baseInfo)
+			messageBuilder.WriteString(" ")
+			messageBuilder.WriteString(fingerprintStr)
 		}
+
+		if rf.showFingerprintSnippet && len(matches) > 0 {
+			var snippetLines []string
+			for _, m := range matches {
+				snippet := strings.TrimSpace(m.Snippet)
+				if snippet == "" {
+					continue
+				}
+				highlighted := formatter.HighlightSnippet(snippet, m.Matcher)
+				if highlighted == "" {
+					continue
+				}
+				snippetLines = append(snippetLines, highlighted)
+			}
+			if len(snippetLines) > 0 {
+				messageBuilder.WriteString("\n")
+				for idx, snippetLine := range snippetLines {
+					if idx > 0 {
+						messageBuilder.WriteString("\n")
+					}
+					messageBuilder.WriteString("  ⮕  ")
+					messageBuilder.WriteString(snippetLine)
+				}
+			}
+		}
+
+		logger.Info(messageBuilder.String())
 	}
 }
 
@@ -681,7 +650,7 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 
 	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, matchesValue.Len())
 
-	convertedMatches := rf.convertMatchesToInterfaces(matchesValue)
+	convertedMatches := rf.convertMatchesToInterfaces(matchesValue, rf.showFingerprintSnippet)
 
 	// 格式化指纹信息
 	return convertedMatches, rf.formatFingerprintMatches(matchesInterface)
@@ -782,7 +751,7 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 	return newResp.Interface()
 }
 
-func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value) []interfaces.FingerprintMatch {
+func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value, includeSnippet bool) []interfaces.FingerprintMatch {
 	count := matchesValue.Len()
 	if count == 0 {
 		return nil
@@ -815,9 +784,6 @@ func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value)
 		if field := item.FieldByName("DSLMatched"); field.IsValid() && field.Kind() == reflect.String {
 			match.Matcher = field.String()
 		}
-		if field := item.FieldByName("Confidence"); field.IsValid() && field.CanFloat() {
-			match.Confidence = field.Float()
-		}
 		if field := item.FieldByName("Timestamp"); field.IsValid() {
 			switch field.Kind() {
 			case reflect.Int, reflect.Int64, reflect.Int32:
@@ -828,6 +794,11 @@ func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value)
 						match.Timestamp = t.Unix()
 					}
 				}
+			}
+		}
+		if includeSnippet {
+			if field := item.FieldByName("Snippet"); field.IsValid() && field.Kind() == reflect.String {
+				match.Snippet = field.String()
 			}
 		}
 
@@ -880,7 +851,7 @@ func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{})
 
 		if ruleName != "" && dslMatched != "" {
 			parts = append(parts, fmt.Sprintf("<%s> <%s>",
-				formatter.FormatFingerprint(ruleName),
+				formatter.FormatFingerprintName(ruleName),
 				formatter.FormatDSL(dslMatched)))
 			logger.Debugf("匹配: %s - %s", ruleName, dslMatched)
 		}

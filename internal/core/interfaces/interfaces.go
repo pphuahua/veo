@@ -36,21 +36,21 @@ type ResponseFilterInterface interface {
 // HTTPResponse HTTP响应结构体
 // 用于在各个模块之间传递HTTP响应数据
 type HTTPResponse struct {
-	URL             string              `json:"url"`              // 请求的URL
-	Method          string              `json:"method"`           // 请求方法
-	StatusCode      int                 `json:"status_code"`      // HTTP状态码
-	Title           string              `json:"title"`            // 页面标题
-	ContentLength   int64               `json:"content_length"`   // 内容长度
-	ContentType     string              `json:"content_type"`     // 内容类型
-	Body            string              `json:"body"`             // 响应体内容
-	ResponseHeaders map[string][]string `json:"response_headers"` // 响应头信息
-	RequestHeaders  map[string][]string `json:"request_headers"`  // 请求头信息
-	Server          string              `json:"server"`           // 服务器信息
-	IsDirectory     bool                `json:"is_directory"`     // 是否为目录
-	Length          int64               `json:"length"`                // 内容长度（报告用）
-	Duration        int64               `json:"duration"`              // 请求耗时（毫秒）
-	Depth           int                 `json:"depth"`                 // 扫描深度
-	ResponseBody    string              `json:"response_body"`         // 响应体内容（报告用）
+	URL             string              `json:"url"`                    // 请求的URL
+	Method          string              `json:"method"`                 // 请求方法
+	StatusCode      int                 `json:"status_code"`            // HTTP状态码
+	Title           string              `json:"title"`                  // 页面标题
+	ContentLength   int64               `json:"content_length"`         // 内容长度
+	ContentType     string              `json:"content_type"`           // 内容类型
+	Body            string              `json:"body"`                   // 响应体内容
+	ResponseHeaders map[string][]string `json:"response_headers"`       // 响应头信息
+	RequestHeaders  map[string][]string `json:"request_headers"`        // 请求头信息
+	Server          string              `json:"server"`                 // 服务器信息
+	IsDirectory     bool                `json:"is_directory"`           // 是否为目录
+	Length          int64               `json:"length"`                 // 内容长度（报告用）
+	Duration        int64               `json:"duration"`               // 请求耗时（毫秒）
+	Depth           int                 `json:"depth"`                  // 扫描深度
+	ResponseBody    string              `json:"response_body"`          // 响应体内容（报告用）
 	Fingerprints    []FingerprintMatch  `json:"fingerprints,omitempty"` // 匹配到的指纹信息
 }
 
@@ -95,11 +95,11 @@ type FingerprintEngine interface {
 
 // FingerprintMatch 指纹匹配结果（简化版本）
 type FingerprintMatch struct {
-	URL        string  `json:"url"`        // 匹配的URL
-	RuleName   string  `json:"rule_name"`  // 匹配的规则名称
-	Matcher    string  `json:"matcher"`    // 匹配的具体表达式
-	Confidence float64 `json:"confidence"` // 匹配置信度 (0.0 - 1.0)
-	Timestamp  int64   `json:"timestamp"`  // 匹配时间戳
+	URL       string `json:"url"`               // 匹配的URL
+	RuleName  string `json:"rule_name"`         // 匹配的规则名称
+	Matcher   string `json:"matcher"`           // 匹配的具体表达式
+	Timestamp int64  `json:"timestamp"`         // 匹配时间戳
+	Snippet   string `json:"snippet,omitempty"` // 匹配内容片段
 }
 
 // FingerprintRule 指纹识别规则（极简版本，只保留核心字段）

@@ -20,6 +20,8 @@ import (
 	"veo/internal/modules/dirscan"
 	"veo/internal/modules/fingerprint"
 	"veo/internal/utils/collector"
+	"veo/internal/utils/dictionary"
+	"veo/internal/utils/filter"
 	"veo/internal/utils/formatter"
 	"veo/internal/utils/httpclient"
 	"veo/proxy"
@@ -58,6 +60,9 @@ type CLIArgs struct {
 	// 新增：实时统计显示参数
 	Stats bool // 启用实时扫描进度统计显示 (--stats)
 
+	// 指纹细节输出开关
+	VeryVerbose bool // 指纹匹配内容展示开关 (-vv)
+
 	// 新增：HTTP认证头部参数
 	Headers []string // 自定义HTTP认证头部 (--header "Header-Name: Header-Value")
 
@@ -94,10 +99,9 @@ func Execute() {
 	}
 
 	// 初始化日志系统
-	logConfig := config.GetlogConfig()
 	loggerConfig := &logger.LogConfig{
-		Level:       logConfig.Level,
-		ColorOutput: logConfig.ColorOutput,
+		Level:       "info",
+		ColorOutput: true,
 	}
 	if err := logger.InitializeLogger(loggerConfig); err != nil {
 		// 如果初始化失败，使用默认配置
@@ -166,7 +170,8 @@ func ParseCLIArgs() *CLIArgs {
 		outputLong = flag.String("output", "", "输出报告文件路径 (默认不输出文件)")
 
 		// 新增：实时统计显示参数
-		stats = flag.Bool("stats", false, "启用实时扫描进度统计显示")
+		stats       = flag.Bool("stats", false, "启用实时扫描进度统计显示")
+		veryVerbose = flag.Bool("vv", false, "控制指纹匹配内容展示开关 (默认关闭，可使用 --vv 开启)")
 
 		// 新增：状态码过滤参数
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
@@ -202,11 +207,12 @@ func ParseCLIArgs() *CLIArgs {
 		Debug:      *debug,
 
 		// 新增参数处理：支持短参数和长参数
-		Threads: getMaxInt(*threads, *threadsLong),
-		Retry:   *retry,
-		Timeout: *timeout,
-		Output:  getStringValue(*output, *outputLong),
-		Stats:   *stats,
+		Threads:     getMaxInt(*threads, *threadsLong),
+		Retry:       *retry,
+		Timeout:     *timeout,
+		Output:      getStringValue(*output, *outputLong),
+		Stats:       *stats,
+		VeryVerbose: *veryVerbose,
 
 		// 新增：HTTP认证头部参数
 		Headers: []string(headers),
@@ -614,10 +620,10 @@ func validateWordlistFile(wordlistPath string) error {
 
 // validateOutputPath 验证输出路径
 func validateOutputPath(outputPath string) error {
-	// 支持.html和.json扩展名
+	// 支持 .json 和 .xlsx 扩展名
 	lowerPath := strings.ToLower(outputPath)
-	if !strings.HasSuffix(lowerPath, ".html") && !strings.HasSuffix(lowerPath, ".json") {
-		return fmt.Errorf("输出文件必须以.html或.json结尾，当前: %s", outputPath)
+	if !strings.HasSuffix(lowerPath, ".json") && !strings.HasSuffix(lowerPath, ".xlsx") {
+		return fmt.Errorf("输出文件必须以.json或.xlsx结尾，当前: %s", outputPath)
 	}
 
 	// 获取目录路径
@@ -770,9 +776,7 @@ func applyArgsToConfig(args *CLIArgs) {
 		logger.SetLogLevel("debug")
 		logger.Debug("调试模式已启用，显示所有级别日志")
 	} else {
-		// 保持配置文件中的级别设置，或使用默认的info级别
-		logConfig := config.GetlogConfig()
-		logger.SetLogLevel(logConfig.Level)
+		logger.SetLogLevel("info")
 	}
 
 	// 应用新的CLI参数到配置
@@ -804,17 +808,30 @@ func applyArgsToConfig(args *CLIArgs) {
 	}
 
 	// 新增：处理状态码过滤参数
+	var customFilterConfig *filter.FilterConfig
+
 	if args.StatusCodes != "" {
-		if err := applyStatusCodeFilter(args.StatusCodes); err != nil {
+		statusCodes, err := parseStatusCodes(args.StatusCodes)
+		if err != nil {
 			logger.Errorf("状态码过滤参数处理失败: %v", err)
+		} else if len(statusCodes) > 0 {
+			logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
+			customFilterConfig = filter.DefaultFilterConfig()
+			customFilterConfig.ValidStatusCodes = statusCodes
+			logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
 		}
 	}
 
-	// 新增：处理相似页面过滤容错阈值参数（只有明确指定时才覆盖）
 	if args.FilterTolerance != -1 {
-		filterConfig := config.GetFilterConfig()
-		filterConfig.FilterTolerance = int64(args.FilterTolerance)
+		if customFilterConfig == nil {
+			customFilterConfig = filter.DefaultFilterConfig()
+		}
+		customFilterConfig.FilterTolerance = int64(args.FilterTolerance)
 		logger.Debugf("CLI参数覆盖：相似页面过滤容错阈值设置为 %d 字节", args.FilterTolerance)
+	}
+
+	if customFilterConfig != nil {
+		filter.SetGlobalFilterConfig(customFilterConfig)
 	}
 
 	// 设置目标白名单（支持子域名匹配）
@@ -846,17 +863,14 @@ func applyArgsToConfig(args *CLIArgs) {
 
 	// 应用自定义字典路径
 	if args.Wordlist != "" {
-		contentConfig := config.GetContentConfig()
-		contentConfig.Common = args.Wordlist
-		logger.Infof("使用自定义字典: %s", args.Wordlist)
+		wordlists := parseWordlistPaths(args.Wordlist)
+		dictionary.SetWordlistPaths(wordlists)
+		logger.Infof("使用自定义字典: %s", strings.Join(wordlists, ","))
+	} else {
+		dictionary.SetWordlistPaths(nil)
 	}
 
 	// 应用输出文件路径
-	if args.Output != "" {
-		reportConfig := config.GetReportConfig()
-		reportConfig.FileName = args.Output
-		logger.Debugf("CLI参数覆盖：输出文件路径设置为 %s", args.Output)
-	}
 }
 
 // createProxy 创建代理服务器
@@ -1189,31 +1203,23 @@ func validateStatusCode(code int) error {
 	return nil
 }
 
-// applyStatusCodeFilter 应用状态码过滤到配置系统
-func applyStatusCodeFilter(statusCodesStr string) error {
-	// 解析状态码
-	statusCodes, err := parseStatusCodes(statusCodesStr)
-	if err != nil {
-		return fmt.Errorf("解析状态码失败: %v", err)
-	}
-
-	if len(statusCodes) == 0 {
-		logger.Debug("未指定有效的状态码")
+func parseWordlistPaths(raw string) []string {
+	if raw == "" {
 		return nil
 	}
-
-	logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
-
-	// 将解析后的状态码应用到配置系统
-	filterConfig := config.GetFilterConfig()
-	filterConfig.ValidStatusCodes = statusCodes
-
-	logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
-
-	return nil
-}
-
-// HasStatusCodeFilter 检查是否指定了状态码过滤
-func (args *CLIArgs) HasStatusCodeFilter() bool {
-	return args.StatusCodes != ""
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]struct{})
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }

@@ -40,6 +40,7 @@ JDBC泄漏:
   - contains(body, 'mssql.jdbc.')
   - contains(body, 'mssql.user')
   - contains(body, 'com.microsoft.sqlserver.jdbc.SQLServerDriver')
+  - regex(body, '(jdbc:[a-z:]+://[a-z0-9\.\-_:;=/@?,&]+)')
 
 邮箱凭证泄漏:
   dsl:
@@ -206,13 +207,8 @@ SQL语法报错:
   dsl:
   - regex(body, '^[^:]+:[^:]*:[0-9]*:*[0-9]*:[0-9]*:[0-9]*:::')
 
-extracted-token:
-  dsl:
-  - regex(body, '(?i)(([a-z0-9]+)[-|_])?(key|password|passwd|pass|pwd|private|credential|auth|cred|creds|secret|access|token|secretaccesskey)([-|_][a-z]+)?(\\s)*(:|=)+')
-
 asp-webshell:
   dsl:
-  - regex(body, '(?i)(eval)')
   - regex(body, '(?i)wscript.shell')
   - regex(body, '(?i)ExecuteStatement')
   - regex(body, '(?i)cmd.exe')
@@ -299,10 +295,6 @@ UCloud:
   dsl:
   - regex(body, '(LTC[A-Za-z0-9]{10,60})')
 
-移动云:
-  dsl:
-  - regex(body, '(YD[A-Za-z0-9]{10,60})')
-
 电信云:
   dsl:
   - regex(body, '(CTC[A-Za-z0-9]{10,60})')
@@ -342,7 +334,3 @@ email:
 车牌号:
   dsl:
   - regex(body, '([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-HJ-NP-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳])')
-
-jdbc:
-  dsl:
-  - regex(body, '(jdbc:[a-z:]+://[a-z0-9\.\-_:;=/@?,&]+)')

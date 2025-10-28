@@ -15,6 +15,7 @@ import (
 	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
+	"veo/internal/core/module"
 	"veo/internal/modules/fingerprint"
 	report "veo/internal/modules/reporter"
 	"veo/internal/utils/batch"
@@ -29,6 +30,7 @@ import (
 	"veo/internal/core/logger"
 
 	"github.com/andybalholm/brotli"
+	"path/filepath"
 )
 
 // FingerprintProgressTracker 指纹识别进度跟踪器
@@ -81,20 +83,21 @@ const (
 
 // ScanController 扫描控制器
 type ScanController struct {
-	mode              ScanMode
-	args              *CLIArgs
-	config            *config.Config
-	requestProcessor  *requests.RequestProcessor
-	urlGenerator      *generator.URLGenerator
-	contentManager    *generator.ContentManager
-	fingerprintEngine *fingerprint.Engine            // 指纹识别引擎
-	encodingDetector  *fingerprint.EncodingDetector  // 编码检测器
-	entityDecoder     *fingerprint.HTMLEntityDecoder // HTML实体解码器
-	probedHosts       map[string]bool                // 已探测的主机缓存（用于path探测去重）
-	probedMutex       sync.RWMutex                   // 探测缓存锁
-	progressTracker   *FingerprintProgressTracker    // 指纹识别进度跟踪器
-	statsDisplay      *stats.StatsDisplay            // 统计显示器
-	lastTargets       []string                       // 最近解析的目标列表
+	mode                   ScanMode
+	args                   *CLIArgs
+	config                 *config.Config
+	requestProcessor       *requests.RequestProcessor
+	urlGenerator           *generator.URLGenerator
+	contentManager         *generator.ContentManager
+	fingerprintEngine      *fingerprint.Engine            // 指纹识别引擎
+	encodingDetector       *fingerprint.EncodingDetector  // 编码检测器
+	entityDecoder          *fingerprint.HTMLEntityDecoder // HTML实体解码器
+	probedHosts            map[string]bool                // 已探测的主机缓存（用于path探测去重）
+	probedMutex            sync.RWMutex                   // 探测缓存锁
+	progressTracker        *FingerprintProgressTracker    // 指纹识别进度跟踪器
+	statsDisplay           *stats.StatsDisplay            // 统计显示器
+	lastTargets            []string                       // 最近解析的目标列表
+	showFingerprintSnippet bool                           // 是否展示指纹匹配内容
 }
 
 // NewScanController 创建扫描控制器
@@ -172,18 +175,21 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		requestProcessor.SetStatsUpdater(statsDisplay)
 	}
 
+	snippetEnabled := args.VeryVerbose
+
 	return &ScanController{
-		mode:              mode,
-		args:              args,
-		config:            cfg,
-		requestProcessor:  requestProcessor,
-		urlGenerator:      generator.NewURLGenerator(),
-		contentManager:    generator.NewContentManager(),
-		fingerprintEngine: fpEngine,
-		encodingDetector:  fingerprint.GetEncodingDetector(),  // 初始化编码检测器
-		entityDecoder:     fingerprint.GetHTMLEntityDecoder(), // 初始化HTML实体解码器
-		probedHosts:       make(map[string]bool),              // 初始化探测缓存
-		statsDisplay:      statsDisplay,                       // 初始化统计显示器
+		mode:                   mode,
+		args:                   args,
+		config:                 cfg,
+		requestProcessor:       requestProcessor,
+		urlGenerator:           generator.NewURLGenerator(),
+		contentManager:         generator.NewContentManager(),
+		fingerprintEngine:      fpEngine,
+		encodingDetector:       fingerprint.GetEncodingDetector(),  // 初始化编码检测器
+		entityDecoder:          fingerprint.GetHTMLEntityDecoder(), // 初始化HTML实体解码器
+		probedHosts:            make(map[string]bool),              // 初始化探测缓存
+		statsDisplay:           statsDisplay,                       // 初始化统计显示器
+		showFingerprintSnippet: snippetEnabled,
 	}
 }
 
@@ -713,7 +719,7 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 				Duration:        resp.Duration,
 				IsDirectory:     false,
 			}
-			if converted := convertFingerprintMatches(matches); len(converted) > 0 {
+			if converted := convertFingerprintMatches(matches, sc.showFingerprintSnippet); len(converted) > 0 {
 				httpResp.Fingerprints = converted
 			}
 			allResults = append(allResults, httpResp)
@@ -775,7 +781,7 @@ func (sc *ScanController) processSingleTargetFingerprint(target string) []interf
 			Duration:        resp.Duration,
 			IsDirectory:     false,
 		}
-		if converted := convertFingerprintMatches(matches); len(converted) > 0 {
+		if converted := convertFingerprintMatches(matches, sc.showFingerprintSnippet); len(converted) > 0 {
 			httpResp.Fingerprints = converted
 		}
 		results = append(results, httpResp)
@@ -866,18 +872,45 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 	// 准备报告数据
 	target := strings.Join(sc.args.Targets, ",")
 
+	lowerOutput := strings.ToLower(outputPath)
 	// 根据文件扩展名选择报告格式
-	if strings.HasSuffix(strings.ToLower(outputPath), ".json") {
-		// 生成JSON报告
+	switch {
+	case strings.HasSuffix(lowerOutput, ".json"):
 		return sc.generateJSONReport(filterResult, target, outputPath)
-	} else {
-		// 生成HTML报告（默认）
-		reportGenerator := report.NewCustomReportGenerator(outputPath)
-		reportPath, err := reportGenerator.GenerateReport(filterResult, target)
-		if err != nil {
-			return "", fmt.Errorf("生成自定义HTML报告失败: %v", err)
+	case strings.HasSuffix(lowerOutput, ".xlsx"):
+		reportType := determineExcelReportType(sc.args.Modules)
+		return report.GenerateExcelReport(filterResult, reportType, outputPath)
+	default:
+		reportType := determineExcelReportType(sc.args.Modules)
+		deducedPath := outputPath
+		if filepath.Ext(outputPath) == "" {
+			deducedPath = outputPath + ".xlsx"
+		} else {
+			deducedPath = strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".xlsx"
 		}
-		return reportPath, nil
+		logger.Warnf("不支持的报告后缀，默认为xlsx输出: %s", deducedPath)
+		return report.GenerateExcelReport(filterResult, reportType, deducedPath)
+	}
+}
+
+func determineExcelReportType(modules []string) report.ExcelReportType {
+	var hasDirscan, hasFingerprint bool
+	for _, moduleName := range modules {
+		if moduleName == string(module.ModuleDirscan) {
+			hasDirscan = true
+		}
+		if moduleName == string(module.ModuleFinger) {
+			hasFingerprint = true
+		}
+	}
+
+	switch {
+	case hasDirscan && hasFingerprint:
+		return report.ExcelReportDirscanAndFingerprint
+	case hasDirscan:
+		return report.ExcelReportDirscan
+	default:
+		return report.ExcelReportFingerprint
 	}
 }
 
@@ -943,6 +976,7 @@ func (sc *ScanController) applyFilter(responses []interfaces.HTTPResponse) (*int
 
 	// 创建响应过滤器（从外部配置）
 	responseFilter := filter.CreateResponseFilterFromExternal()
+	responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
 
 	// 应用过滤器
 	filterResult := responseFilter.FilterResponses(responses)
@@ -962,6 +996,7 @@ func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPRespon
 
 	// 创建响应过滤器（从外部配置）
 	responseFilter := filter.CreateResponseFilterFromExternal()
+	responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
 
 	// [新增] 如果指纹引擎可用，设置到过滤器中（启用二次识别）
 	if sc.fingerprintEngine != nil {
@@ -1152,7 +1187,7 @@ func (sc *ScanController) extractTitleFromHTML(body string) string {
 	return ""
 }
 
-func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch) []interfaces.FingerprintMatch {
+func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []interfaces.FingerprintMatch {
 	if len(matches) == 0 {
 		return nil
 	}
@@ -1164,13 +1199,16 @@ func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch) []interf
 		}
 
 		timestamp := match.Timestamp.Unix()
-		converted = append(converted, interfaces.FingerprintMatch{
-			URL:        match.URL,
-			RuleName:   match.RuleName,
-			Matcher:    match.DSLMatched,
-			Confidence: match.Confidence,
-			Timestamp:  timestamp,
-		})
+		convertedMatch := interfaces.FingerprintMatch{
+			URL:       match.URL,
+			RuleName:  match.RuleName,
+			Matcher:   match.DSLMatched,
+			Timestamp: timestamp,
+		}
+		if includeSnippet {
+			convertedMatch.Snippet = match.Snippet
+		}
+		converted = append(converted, convertedMatch)
 	}
 
 	return converted
@@ -1583,21 +1621,60 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 	if len(matches) > 0 {
 		logger.Debugf("404页面匹配到 %d 个指纹", len(matches))
 
-		// 输出404页面的匹配结果（使用与主动探测一致的格式）
+		title := response.Title
+		if title == "" {
+			title = "无标题"
+		}
+
+		pairs := make([]string, 0, len(matches))
+		var snippetLines []string
+
 		for _, match := range matches {
-			// [修复] 直接使用原始标题，避免重复格式化导致双重方括号
-			title := response.Title
-			if title == "" {
-				title = "无标题"
+			if match == nil {
+				continue
+			}
+			pair := formatter.FormatFingerprintPair(match.RuleName, match.DSLMatched)
+			if pair != "" {
+				pairs = append(pairs, pair)
 			}
 
-			logger.Infof("%s %s <%s> <%s> [%s]",
-				formatter.FormatURL(notFoundURL),
-				formatter.FormatTitle(title),
-				formatter.FormatFingerprintName(match.RuleName),
-				formatter.FormatDSLRule(match.DSLMatched),
-				formatter.FormatFingerprintTag("404页面"))
+			if sc.showFingerprintSnippet {
+				if snippet := strings.TrimSpace(match.Snippet); snippet != "" {
+					highlighted := formatter.HighlightSnippet(snippet, match.DSLMatched)
+					if highlighted != "" {
+						snippetLines = append(snippetLines, highlighted)
+					}
+				}
+			}
 		}
+
+		var builder strings.Builder
+		builder.WriteString(formatter.FormatURL(notFoundURL))
+		builder.WriteString(" ")
+		builder.WriteString(formatter.FormatTitle(title))
+		builder.WriteString(" ")
+
+		for _, pair := range pairs {
+			builder.WriteString(" ")
+			builder.WriteString(pair)
+		}
+
+		builder.WriteString(" [")
+		builder.WriteString(formatter.FormatFingerprintTag("404页面"))
+		builder.WriteString("]")
+
+		if len(snippetLines) > 0 {
+			builder.WriteString("\n")
+			for idx, snippetLine := range snippetLines {
+				if idx > 0 {
+					builder.WriteString("\n")
+				}
+				builder.WriteString("  ⮕  ")
+				builder.WriteString(snippetLine)
+			}
+		}
+
+		logger.Info(builder.String())
 	} else {
 		logger.Debugf("404页面未匹配到任何指纹")
 	}

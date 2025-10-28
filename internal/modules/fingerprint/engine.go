@@ -79,6 +79,20 @@ func (e *Engine) SetStaticFileExtensions(extensions []string) {
 	}
 }
 
+// EnableSnippet 控制是否输出指纹匹配片段
+func (e *Engine) EnableSnippet(enabled bool) {
+	e.mu.Lock()
+	e.showSnippet = enabled
+	e.mu.Unlock()
+}
+
+// IsSnippetEnabled 返回是否启用指纹匹配片段输出
+func (e *Engine) IsSnippetEnabled() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.showSnippet
+}
+
 // SetStaticFileFilterEnabled 控制是否启用静态文件过滤
 func (e *Engine) SetStaticFileFilterEnabled(enabled bool) {
 	e.mu.Lock()
@@ -164,10 +178,14 @@ func (e *Engine) loadSingleYAMLFile(filePath string) (int, error) {
 
 	// 处理规则
 	loadedCount := 0
+	isSensitiveFile := strings.Contains(strings.ToLower(filepath.Base(filePath)), "sensitive")
 	for ruleName, rule := range rulesMap {
 		if rule != nil {
 			rule.ID = ruleName
 			rule.Name = ruleName
+			if isSensitiveFile && strings.TrimSpace(rule.Category) == "" {
+				rule.Category = "sensitive"
+			}
 
 			// 检查规则ID冲突
 			if existingRule, exists := e.rules[ruleName]; exists {
@@ -338,13 +356,22 @@ func (e *Engine) matchRule(rule *FingerprintRule, ctx *DSLContext) *FingerprintM
 		}
 		// 所有表达式都匹配成功
 		if len(matchedDSLs) == len(rule.DSL) {
+			snippet := ""
+			if e.shouldCaptureSnippet(rule) {
+				for _, dsl := range matchedDSLs {
+					snippet = e.extractSnippetForDSL(dsl, ctx)
+					if snippet != "" {
+						break
+					}
+				}
+			}
 			return &FingerprintMatch{
 				URL:        ctx.URL,
 				RuleName:   rule.Name,
 				Technology: rule.Name,
 				DSLMatched: fmt.Sprintf("AND(%s)", strings.Join(matchedDSLs, " && ")),
-				Confidence: 1.0,
 				Timestamp:  time.Now(),
+				Snippet:    snippet,
 			}
 		}
 	case "or":
@@ -356,19 +383,35 @@ func (e *Engine) matchRule(rule *FingerprintRule, ctx *DSLContext) *FingerprintM
 		// OR条件：任意一个DSL表达式匹配即可
 		for _, dsl := range rule.DSL {
 			if e.dslParser.EvaluateDSL(dsl, ctx) {
+				snippet := ""
+				if e.shouldCaptureSnippet(rule) {
+					snippet = e.extractSnippetForDSL(dsl, ctx)
+				}
 				return &FingerprintMatch{
 					URL:        ctx.URL,
 					RuleName:   rule.Name,
 					Technology: rule.Name,
 					DSLMatched: dsl,
-					Confidence: 1.0,
 					Timestamp:  time.Now(),
+					Snippet:    snippet,
 				}
 			}
 		}
 	}
 
 	return nil
+}
+
+func (e *Engine) shouldCaptureSnippet(rule *FingerprintRule) bool {
+	return true
+}
+
+func (e *Engine) extractSnippetForDSL(dsl string, ctx *DSLContext) string {
+	if ctx == nil || strings.TrimSpace(dsl) == "" {
+		return ""
+	}
+	snippet := e.dslParser.ExtractSnippet(dsl, ctx)
+	return snippet
 }
 
 // createDSLContext 创建DSL解析上下文（基础版本，用于被动识别）
@@ -754,17 +797,51 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 			title = "无标题"
 		}
 		logMsg.WriteString(formatter.FormatTitle(title))
-		logMsg.WriteString(" <")
-		logMsg.WriteString(formatter.FormatFingerprintName(strings.Join(fingerprintNames, ",")))
-		logMsg.WriteString("> <")
-		logMsg.WriteString(formatter.FormatDSLRule(strings.Join(dslRules, ",")))
-		logMsg.WriteString(">")
+		for _, match := range matches {
+			if match == nil {
+				continue
+			}
+			pair := formatter.FormatFingerprintPair(match.RuleName, match.DSLMatched)
+			if pair == "" {
+				continue
+			}
+			logMsg.WriteString(" ")
+			logMsg.WriteString(pair)
+		}
 
 		// 添加标签（如果提供）
 		if tag != "" {
 			logMsg.WriteString(" [")
 			logMsg.WriteString(formatter.FormatFingerprintTag(tag))
 			logMsg.WriteString("]")
+		}
+
+		if e.showSnippet {
+			var snippetLines []string
+			for _, match := range matches {
+				if match == nil {
+					continue
+				}
+				snippet := strings.TrimSpace(match.Snippet)
+				if snippet == "" {
+					continue
+				}
+				highlighted := formatter.HighlightSnippet(snippet, match.DSLMatched)
+				if highlighted == "" {
+					continue
+				}
+				snippetLines = append(snippetLines, highlighted)
+			}
+			if len(snippetLines) > 0 {
+				logMsg.WriteString("\n")
+				for idx, snippetLine := range snippetLines {
+					if idx > 0 {
+						logMsg.WriteString("\n")
+					}
+					logMsg.WriteString("  ⮕  ")
+					logMsg.WriteString(snippetLine)
+				}
+			}
 		}
 
 		logger.Info(logMsg.String())

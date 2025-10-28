@@ -16,3 +16,7 @@ test
 /release
 1.html
 1.json
+veo_darwin_arm64
+test.go
+/plans
+internal/utils/dictionary/manager.go

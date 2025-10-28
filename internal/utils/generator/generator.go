@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	"veo/internal/utils/dictionary"
@@ -154,19 +153,6 @@ func (ug *URLGenerator) generateRootURLs(components URLComponents) {
 	// 使用通用字典
 	commonDict := ug.dictManager.GetCommonDictionary()
 	ug.generateURLsFromDictionary(components, "", commonDict, "通用字典")
-
-	// 检查配置是否启用文件字典
-	contentConfig := config.GetContentConfig()
-	if contentConfig.FilesDict {
-		// 使用文件字典（仅限根目录）
-		filesDict := ug.dictManager.GetFilesDictionary()
-		if len(filesDict) > 0 {
-			ug.generateURLsFromDictionary(components, "", filesDict, "文件字典")
-			logger.Debug("文件字典已启用，仅在根目录使用")
-		}
-	} else {
-		logger.Debug("文件字典已禁用，跳过文件字典使用")
-	}
 }
 
 // generatePathLevelURLs 生成路径层级扫描URL

@@ -2,6 +2,9 @@ package dirscan
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 	"veo/internal/core/config"
@@ -87,22 +90,15 @@ func (e *Engine) ClearResults() {
 // PerformScan 执行扫描
 func (e *Engine) PerformScan(collectorInstance interfaces.URLCollectorInterface) (*ScanResult, error) {
 	startTime := time.Now()
-	// 1. 检查收集的URL
-	urlCount := collectorInstance.GetURLCount()
-	if urlCount == 0 {
-		return nil, fmt.Errorf("没有收集到URL，无法开始扫描")
-	}
 
-	logger.Debugf("已收集URL数量: %d", urlCount)
-
-	// 2. 生成扫描URL
+	// 1. 生成扫描URL（内部会处理URL收集为空的情况）
 	scanURLs, err := e.generateScanURLs(collectorInstance)
 	if err != nil {
 		return nil, fmt.Errorf("生成扫描URL失败: %v", err)
 	}
 
 	if len(scanURLs) == 0 {
-		return nil, fmt.Errorf("没有生成扫描URL")
+		return nil, fmt.Errorf("没有收集到URL，无法开始扫描")
 	}
 
 	logger.Debugf("生成扫描URL: %d个", len(scanURLs))
@@ -272,8 +268,20 @@ func (e *Engine) applyFilter(responses []*interfaces.HTTPResponse) (*interfaces.
 func (e *Engine) generateReport(filterResult *interfaces.FilterResult, target string) (string, error) {
 	logger.Debug("开始生成扫描报告")
 
-	// 使用reporter包生成报告
-	reportPath, err := report.QuickReport(filterResult, target)
+	reportDir := "./reports"
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		return "", fmt.Errorf("创建报告目录失败: %v", err)
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	safeTarget := sanitizeForReportFilename(target)
+	if safeTarget == "" {
+		safeTarget = "scan"
+	}
+	fileName := fmt.Sprintf("dirscan_%s_%s.xlsx", safeTarget, timestamp)
+	outputPath := filepath.Join(reportDir, fileName)
+
+	reportPath, err := report.GenerateExcelReport(filterResult, report.ExcelReportDirscan, outputPath)
 	if err != nil {
 		return "", err
 	}
@@ -329,4 +337,19 @@ func (e *Engine) extractTarget(responses []*interfaces.HTTPResponse) string {
 		return firstURL[:50] + "..."
 	}
 	return firstURL
+}
+
+func sanitizeForReportFilename(name string) string {
+	replacer := strings.NewReplacer(
+		":", "_",
+		"/", "_",
+		"\\", "_",
+		"?", "_",
+		"*", "_",
+		"|", "_",
+		"<", "_",
+		">", "_",
+		"\"", "_",
+	)
+	return strings.Trim(replacer.Replace(name), "_")
 }

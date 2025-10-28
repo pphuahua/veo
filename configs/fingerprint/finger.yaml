@@ -487,7 +487,7 @@ fortinet-sslvpn:
 
 geoserver:
   dsl:
-    - "contains(body, 'class=\"geoserver lebeg')"
+    - "contains(body, 'class=\"geoserver lebeg','GeoServerBasePage','_spring_security_remember_me','navigation-tab-content plain')"
 
 geotrust-cert:
   dsl:
@@ -2237,11 +2237,6 @@ canal-admin:
   dsl:
     - "contains(body, 'Canal Admin')"
 
-cas-单点登录:
-  dsl:
-    - "contains(body, 'Central Authentication Service')"
-    - "contains(body, 'cas/login')"
-
 centos-默认页面:
   dsl:
     - "contains(body, '<title>Welcome to CentOS</title>')"
@@ -2298,11 +2293,6 @@ emlog:
 enesys:
   dsl:
     - "contains(body, 'dwr/interface/WebContextUtil.js')"
-
-entercrm:
-  dsl:
-    - "contains(body, '杭州恩软')"
-    - "contains(body, 'Ent.base.js')"
 
 epoint政务服务系统:
   dsl:
@@ -3355,7 +3345,7 @@ springboot-actuator:
 
 api-docs:
   dsl:
-    - "contains_all(body, 'swagger','info','basePath','paths')"
+    - "contains_all(body, 'swagger','info','paths')"
 
 山东先森网络:
   dsl:
@@ -3366,6 +3356,11 @@ WebServiceWeb服务:
   dsl:
     - "contains(body, 'WebService.asmx?WSDL','microsoft.com/webservices')"
 
-1111管理系统:
+Zimbra邮件管理系统:
   dsl:
-    - "contains(body, '<title>Object moved</title>')"
+    - "title('Zimbra 网络客户端登录')"
+    - "contains(body, 'class=\"ScreenReaderOnly','ZLoginWhatsThisAnchor','ZLoginUnsupported')"
+
+浙大恩特客户资源管理系统:
+  dsl:
+    - "contains(body, 'entsoft_en','LoginDoAction.entcrm','杭州恩软','Ent.base.js')"

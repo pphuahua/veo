@@ -16,7 +16,6 @@ type Config struct {
 	Module ModuleConfig `yaml:"module"` // 修正拼写错误: modle -> module
 	Hosts  HostsConfig  `yaml:"hosts"`
 	Addon  AddonConfig  `yaml:"addon"`
-	Log    LogConfig    `yaml:"log"` // 新增：日志配置
 }
 
 // ModuleConfig 模块配置
@@ -36,29 +35,11 @@ type HostsConfig struct {
 	Reject []string `yaml:"reject"`
 }
 
-// LogConfig 日志配置结构体
-type LogConfig struct {
-	Level       string `yaml:"level"`        // 日志级别
-	ColorOutput bool   `yaml:"color_output"` // 彩色输出
-}
-
 // AddonConfig 插件配置
 type AddonConfig struct {
-	Filter    FilterConfig    `yaml:"filter"`
 	Collector CollectorConfig `yaml:"collector"`
 	Request   RequestConfig   `yaml:"request"`
-	Content   ContentConfig   `yaml:"content"`
 	Proxy     ProxyConfig     `yaml:"proxy"`
-	Report    ReportConfig    `yaml:"report"`
-}
-
-// FilterConfig 过滤器配置
-type FilterConfig struct {
-	Enable                bool  `yaml:"enable"`
-	Hash                  bool  `yaml:"hash"`
-	ValidStatusCodes      []int `yaml:"ValidStatusCodes"`
-	HashFilterStatusCodes []int `yaml:"hash_filter_status_codes"`
-	FilterTolerance       int64 `yaml:"filter_tolerance"` // 相似页面过滤容错阈值（字节）
 }
 
 // CollectorConfig 收集器配置
@@ -85,17 +66,6 @@ type RequestConfig struct {
 	MaxResponseBodySize int      `yaml:"max_response_body_size"` // [重要] 内存优化：响应体大小限制
 }
 
-// ContentConfig 内容生成配置
-type ContentConfig struct {
-	Enable     bool   `yaml:"enable"`
-	Common     string `yaml:"common"`
-	API        string `yaml:"api"`
-	Files      string `yaml:"files"`
-	FilesDict  bool   `yaml:"files_dict"`  // 保留，dirscan模块中被使用
-	CommonDict bool   `yaml:"common_dict"` // 保留，可能被使用
-	APIDict    bool   `yaml:"api_dict"`    // 保留，可能被使用
-}
-
 // ProxyConfig 代理配置
 type ProxyConfig struct {
 	UpstreamProxy   string `yaml:"upstream_proxy"`
@@ -103,12 +73,6 @@ type ProxyConfig struct {
 	SSLInsecure     bool   `yaml:"ssl_insecure"`
 	ConnectTimeout  int    `yaml:"connect_timeout"`
 	ReadTimeout     int    `yaml:"read_timeout"`
-}
-
-// ReportConfig 报告配置
-type ReportConfig struct {
-	FileName    string `yaml:"file_name"`    // 文件名（不含扩展名）
-	MaxBodysize int    `yaml:"max_bodysize"` // 最大响应体大小（字符数）
 }
 
 // 全局配置实例
@@ -159,18 +123,6 @@ func validateConfig(config *Config) error {
 	// 验证请求配置
 	if config.Addon.Request.Timeout <= 0 {
 		return fmt.Errorf("请求超时时间必须大于0")
-	}
-
-	// 验证字典文件路径
-	if config.Addon.Content.Enable {
-		if config.Addon.Content.Common == "" {
-			return fmt.Errorf("通用字典文件路径不能为空")
-		}
-
-		// 检查字典文件是否存在
-		if _, err := os.Stat(config.Addon.Content.Common); os.IsNotExist(err) {
-			logger.Warn("通用字典文件不存在: ", config.Addon.Content.Common)
-		}
 	}
 
 	// 验证代理配置
@@ -234,11 +186,6 @@ func GetHostsConfig() *HostsConfig {
 	return &GetConfig().Hosts
 }
 
-// GetFilterConfig 获取过滤器配置
-func GetFilterConfig() *FilterConfig {
-	return &GetConfig().Addon.Filter
-}
-
 // GetCollectorConfig 获取收集器配置（保留，collector包中被使用）
 func GetCollectorConfig() *CollectorConfig {
 	return &GetConfig().Addon.Collector
@@ -249,32 +196,9 @@ func GetRequestConfig() *RequestConfig {
 	return &GetConfig().Addon.Request
 }
 
-// GetlogConfig 获取日志配置
-func GetlogConfig() *LogConfig {
-	config := GetConfig()
-	if config == nil {
-		// 返回默认日志配置
-		return &LogConfig{
-			Level:       "info",
-			ColorOutput: true,
-		}
-	}
-	return &config.Log
-}
-
-// GetContentConfig 获取内容配置（保留，CLI中被使用）
-func GetContentConfig() *ContentConfig {
-	return &GetConfig().Addon.Content
-}
-
 // GetProxyConfig 获取代理配置（保留，CLI中被使用）
 func GetProxyConfig() *ProxyConfig {
 	return &GetConfig().Addon.Proxy
-}
-
-// GetReportConfig 获取报告配置（保留，reporter包中被使用）
-func GetReportConfig() *ReportConfig {
-	return &GetConfig().Addon.Report
 }
 
 // IsHostAllowed 检查主机是否被允许
