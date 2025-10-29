@@ -167,6 +167,44 @@ func ResolveTargetsToIPs(targets []string) ([]string, error) {
 			continue
 		}
 
+		// 直接支持 CIDR 表达式（例如 101.35.191.82/24、10.0.0.1/8）
+		if _, _, cidrErr := net.ParseCIDR(raw); cidrErr == nil {
+			add(raw)
+			continue
+		}
+
+		// 直接支持 IP 范围表达式：
+		// 1) 完整起止IP：10.0.0.1-10.2.0.0
+		// 2) 末段范围：10.0.0.1-254
+		if strings.Contains(raw, "-") {
+			parts := strings.SplitN(raw, "-", 2)
+			left := strings.TrimSpace(parts[0])
+			right := strings.TrimSpace(parts[1])
+
+			// 情况1：两端均为完整IP
+			if net.ParseIP(left) != nil && net.ParseIP(right) != nil {
+				add(raw)
+				continue
+			}
+
+			// 情况2：末段范围 A.B.C.X-Y
+			// 验证前缀 A.B.C. 合法，且 X、Y 在 0..255
+			if idx := strings.LastIndex(left, "."); idx != -1 {
+				prefix := left[:idx+1] // 含结尾的点
+				startStr := left[idx+1:]
+				endStr := right
+				if _, errA := strconv.Atoi(startStr); errA == nil {
+					if _, errB := strconv.Atoi(endStr); errB == nil {
+						// 验证前缀是合法的前三段：prefix+"0" 应为合法IP
+						if net.ParseIP(prefix+"0") != nil {
+							add(raw)
+							continue
+						}
+					}
+				}
+			}
+		}
+
 		// 优先按URL解析
 		if u, err := neturl.Parse(raw); err == nil && u.Host != "" {
 			host := u.Host
