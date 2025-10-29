@@ -222,6 +222,30 @@ func FormatValidResult(url string) string {
 	return ColorBold + url + ColorReset
 }
 
+// FormatBold 将文本加粗显示（若启用颜色）
+// 参数：
+//   - s: 原始文本
+// 返回：
+//   - string: 加粗后的文本（或原文本，当颜色禁用时）
+func FormatBold(s string) string {
+    if !shouldUseColors() {
+        return s
+    }
+    return ColorBold + s + ColorReset
+}
+
+// FormatSnippetArrow 返回用于指纹匹配片段前缀的箭头（加粗绿色高亮）
+// 示例："➜ "（带尾随空格）
+// 参数：无
+// 返回：带颜色（或不带颜色）的箭头字符串
+func FormatSnippetArrow() string {
+    arrow := "➜ "
+    if !shouldUseColors() {
+        return arrow
+    }
+    return ColorBold + ColorGreen + arrow + ColorReset
+}
+
 // FormatFingerprintMatch 已废弃：统一使用FormatFingerprintName函数
 // Deprecated: 为了保持主动扫描和被动扫描的输出格式一致，
 // 现在统一使用FormatFingerprintName函数，该函数提供加粗显示效果

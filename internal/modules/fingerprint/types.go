@@ -71,7 +71,8 @@ type Engine struct {
 	staticContentTypes       []string
 	staticFileFilterEnabled  bool
 	contentTypeFilterEnabled bool
-	showSnippet              bool
+    showSnippet              bool
+    loadedSummaries          []string // 已加载规则文件摘要，例如 finger.yaml:754
 }
 
 // Statistics 统计信息

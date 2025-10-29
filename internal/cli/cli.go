@@ -25,6 +25,11 @@ import (
 	"veo/internal/utils/formatter"
 	"veo/internal/utils/httpclient"
 	"veo/proxy"
+
+	// "os/exec" // removed: masscan执行迁移至模块
+    portscanpkg "veo/internal/modules/portscan"
+    masscanrunner "veo/internal/modules/portscan/masscan"
+    // neturl "net/url" // not used after logic change
 )
 
 // arrayFlags 实现flag.Value接口，支持多个相同参数
@@ -44,10 +49,13 @@ type CLIArgs struct {
 	Targets    []string // 目标主机/URL (-u)
 	TargetFile string   // 新增：目标文件路径 (-f)
 	Modules    []string // 启用的模块 (-m)
-	Port       int      // 监听端口 (-p)
-	Wordlist   string   // 自定义字典路径 (-w)
-	Listen     bool     // 被动代理模式 (--listen)
-	Debug      bool     // 调试模式 (--debug)
+	Port       int      // 监听端口 (-lp)
+	// 端口扫描（masscan）相关
+	Ports    string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
+	Rate     int    // 扫描速率 (--rate，包/秒)
+	Wordlist string // 自定义字典路径 (-w)
+	Listen   bool   // 被动代理模式 (--listen)
+	Debug    bool   // 调试模式 (--debug)
 
 	// 新增：线程并发控制和全局配置参数
 	Threads int // 统一线程并发数量 (-t, --threads)
@@ -129,7 +137,10 @@ func Execute() {
 	//  提前显示启动信息，确保banner在所有日志输出之前显示
 	displayStartupInfo(args)
 
-	// 初始化应用程序
+    // 保持既有逻辑：不携带 -p 时，按原有模块执行（目录扫描+指纹识别）。
+    // 若携带 -p，则先执行正常扫描（目录扫描+指纹识别），结束后再执行端口扫描。
+
+	// 初始化应用程序（仅当非端口扫描场景）
 	var err error
 	app, err = initializeApp(args)
 	if err != nil {
@@ -137,19 +148,25 @@ func Execute() {
 	}
 
 	// 根据模式启动应用程序
-	if args.Listen {
-		// 被动代理模式
-		if err := startApplication(args); err != nil {
-			logger.Fatalf("启动应用程序失败: %v", err)
-		}
-		// 等待中断信号
-		waitForSignal()
-	} else {
-		// 主动扫描模式
-		if err := runActiveScanMode(args); err != nil {
-			logger.Fatalf("主动扫描失败: %v", err)
-		}
-	}
+    if args.Listen {
+        // 被动代理模式
+        if err := startApplication(args); err != nil {
+            logger.Fatalf("启动应用程序失败: %v", err)
+        }
+        // 等待中断信号
+        waitForSignal()
+    } else {
+        // 主动扫描模式
+        if err := runActiveScanMode(args); err != nil {
+            logger.Fatalf("主动扫描失败: %v", err)
+        }
+        // 若用户指定了 -p，则在正常扫描完成后执行端口扫描
+        if strings.TrimSpace(args.Ports) != "" {
+            if err := runMasscanPortScan(args); err != nil {
+                logger.Fatalf("端口扫描失败: %v", err)
+            }
+        }
+    }
 }
 
 // ParseCLIArgs 解析命令行参数
@@ -158,7 +175,9 @@ func ParseCLIArgs() *CLIArgs {
 		targetsStr = flag.String("u", "", "目标主机/URL，多个目标用逗号分隔 (例如: -u www.baidu.com,api.baidu.com)")
 		targetFile = flag.String("f", "", "目标文件路径，每行一个目标 (例如: -f targets.txt)")
 		modulesStr = flag.String("m", "", "启用的模块，多个模块用逗号分隔 (例如: -m finger,dirscan)")
-		port       = flag.Int("p", 9080, "代理监听端口 (默认: 9080)")
+		localPort  = flag.Int("lp", 9080, "本地代理监听端口，仅在被动模式下使用 (默认: 9080)")
+		portsArg   = flag.String("p", "", "端口范围，支持单端口或范围，逗号分隔 (例如: -p 80,443,8000-8100 或 1-65535)")
+		rateArg    = flag.Int("rate", 0, "端口扫描速率(包/秒)，仅在启用端口扫描时使用 (例如: --rate 10000)")
 		wordlist   = flag.String("w", "", "自定义字典文件路径 (例如: -w /path/to/custom.txt)")
 		listen     = flag.Bool("listen", false, "启用被动代理模式 (默认: 主动扫描模式)")
 		debug      = flag.Bool("debug", false, "启用调试模式，显示详细日志 (默认: 仅显示INFO及以上级别)")
@@ -207,7 +226,9 @@ func ParseCLIArgs() *CLIArgs {
 	// 创建CLIArgs实例
 	args := &CLIArgs{
 		TargetFile: *targetFile,
-		Port:       *port,
+		Port:       *localPort,
+		Ports:      *portsArg,
+		Rate:       *rateArg,
 		Wordlist:   *wordlist,
 		Listen:     *listen,
 		Debug:      *debug,
@@ -242,8 +263,8 @@ func ParseCLIArgs() *CLIArgs {
 
 	// [新增] 如果未指定模块，使用默认模块
 	if len(args.Modules) == 0 {
-	args.Modules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
-	logger.Debugf("未指定模块，使用默认模块: %s, %s", modulepkg.ModuleFinger, modulepkg.ModuleDirscan)
+		args.Modules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
+		logger.Debugf("未指定模块，使用默认模块: %s, %s", modulepkg.ModuleFinger, modulepkg.ModuleDirscan)
 	}
 
 	if args.JSONOutput {
@@ -341,9 +362,9 @@ veo - 双模式安全扫描工具
         启用被动代理模式 (默认: 主动扫描模式)
         被动模式下工具作为代理服务器运行，拦截HTTP流量
 
-  -p int
-        代理监听端口，仅在被动模式下使用 (默认: 9080)
-        示例: -p 9080
+  -lp int
+        本地代理监听端口，仅在被动模式下使用 (默认: 9080)
+        示例: -lp 9080
 
   -w string
         自定义字典文件路径，覆盖配置文件中的默认字典
@@ -437,13 +458,13 @@ veo - 双模式安全扫描工具
   %s -u target.com -m dirscan --listen
 
   # 全部抓取模式
-  %s -m finger,dirscan --listen -p 8080
+  %s -m finger,dirscan --listen -lp 8080
 
   # 使用自定义字典
   %s -u target.com -m dirscan -w /path/to/wordlist.txt --listen
 
   # 多目标指纹识别
-  %s -u target1.com,target2.com -m finger,dirscan -p 9080 --listen
+  %s -u target1.com,target2.com -m finger,dirscan -lp 9080 --listen
 
 目标文件格式示例 (targets.txt):
   # 这是注释行，会被自动跳过
@@ -517,6 +538,13 @@ func validateArgs(args *CLIArgs) error {
 	// 验证端口范围（仅在被动模式下需要）
 	if args.Listen && (args.Port <= 0 || args.Port > 65535) {
 		return fmt.Errorf("端口必须在1-65535范围内，当前值: %d", args.Port)
+	}
+
+	// 当指定端口扫描时进行基础校验
+	if strings.TrimSpace(args.Ports) != "" {
+		if len(args.Targets) == 0 && strings.TrimSpace(args.TargetFile) == "" {
+			return fmt.Errorf("端口扫描需要通过 -u 或 -f 指定目标")
+		}
 	}
 
 	// 验证线程并发数量
@@ -713,7 +741,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 	var consoleManager *console.ConsoleManager
 	var dirscanModule *dirscan.DirscanModule
 
-    if args.HasModule(string(modulepkg.ModuleDirscan)) {
+	if args.HasModule(string(modulepkg.ModuleDirscan)) {
 		logger.Debug("启用目录扫描模块，创建相关组件...")
 
 		// 创建collector
@@ -736,7 +764,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 
 	// 创建指纹识别插件（如果启用）
 	var fingerprintAddon *fingerprint.FingerprintAddon
-    if args.HasModule(string(modulepkg.ModuleFinger)) {
+	if args.HasModule(string(modulepkg.ModuleFinger)) {
 		logger.Debug("创建指纹识别插件...")
 		fingerprintAddon, err = createFingerprintAddon()
 		if err != nil {
@@ -829,32 +857,32 @@ func applyArgsToConfig(args *CLIArgs) {
 		}
 	}
 
-    // 新增：处理状态码过滤参数
-    // 目标：统一主动/被动两种模式对状态码来源的处理逻辑
-    // 1) 设置全局 ResponseFilter 的有效状态码（影响目录扫描结果过滤）
-    // 2) 同步覆盖被动模式 URL 采集器（Collector）的状态码白名单
-    var customFilterConfig *filter.FilterConfig
+	// 新增：处理状态码过滤参数
+	// 目标：统一主动/被动两种模式对状态码来源的处理逻辑
+	// 1) 设置全局 ResponseFilter 的有效状态码（影响目录扫描结果过滤）
+	// 2) 同步覆盖被动模式 URL 采集器（Collector）的状态码白名单
+	var customFilterConfig *filter.FilterConfig
 
-    if args.StatusCodes != "" {
-        statusCodes, err := parseStatusCodes(args.StatusCodes)
-        if err != nil {
-            logger.Errorf("状态码过滤参数处理失败: %v", err)
-        } else if len(statusCodes) > 0 {
-            logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
+	if args.StatusCodes != "" {
+		statusCodes, err := parseStatusCodes(args.StatusCodes)
+		if err != nil {
+			logger.Errorf("状态码过滤参数处理失败: %v", err)
+		} else if len(statusCodes) > 0 {
+			logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
 
-            // 1) 覆盖全局过滤配置（供 ResponseFilter 使用）
-            customFilterConfig = filter.DefaultFilterConfig()
-            customFilterConfig.ValidStatusCodes = statusCodes
-            logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
+			// 1) 覆盖全局过滤配置（供 ResponseFilter 使用）
+			customFilterConfig = filter.DefaultFilterConfig()
+			customFilterConfig.ValidStatusCodes = statusCodes
+			logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
 
-            // 2) 覆盖被动模式 Collector 的采集状态码白名单
-            collectorCfg := config.GetCollectorConfig()
-            if collectorCfg != nil {
-                collectorCfg.GenerationStatusCodes = statusCodes
-                logger.Infof("CLI参数覆盖：被动采集状态码白名单设置为 %v", statusCodes)
-            }
-        }
-    }
+			// 2) 覆盖被动模式 Collector 的采集状态码白名单
+			collectorCfg := config.GetCollectorConfig()
+			if collectorCfg != nil {
+				collectorCfg.GenerationStatusCodes = statusCodes
+				logger.Infof("CLI参数覆盖：被动采集状态码白名单设置为 %v", statusCodes)
+			}
+		}
+	}
 
 	if args.FilterTolerance != -1 {
 		if customFilterConfig == nil {
@@ -920,6 +948,56 @@ func createProxy() (*proxy.Proxy, error) {
 	return proxy.NewProxy(opts)
 }
 
+// runMasscanPortScan 调用内嵌 masscan 扫描（模块化实现）
+func runMasscanPortScan(args *CLIArgs) error {
+    effectiveRate := args.Rate
+    if effectiveRate <= 0 {
+        effectiveRate = 10000
+    }
+
+    // 端口表达式：若未指定 -p 且未使用 -f，则从URL中推导（默认80/443或URL显式端口）
+    portsExpr := strings.TrimSpace(args.Ports)
+    if portsExpr == "" && strings.TrimSpace(args.TargetFile) == "" {
+        portsExpr = masscanrunner.DerivePortsFromTargets(args.Targets)
+        if portsExpr == "" {
+            return fmt.Errorf("未指定 -p 且无法从URL目标推导端口")
+        }
+    }
+
+    // 目标转换：若使用 -u，则将URL/域名转换为IP列表；若 -f 则保持 -iL 传参
+    var msTargets []string
+    if strings.TrimSpace(args.TargetFile) == "" {
+        var err error
+        msTargets, err = masscanrunner.ResolveTargetsToIPs(args.Targets)
+        if err != nil {
+            return fmt.Errorf("目标解析失败: %v", err)
+        }
+    }
+
+    // 模块开始前空行，提升可读性
+    fmt.Println()
+    logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
+    opts := portscanpkg.Options{
+        Ports:      portsExpr,
+        Rate:       effectiveRate,
+        Targets:    msTargets,
+        TargetFile: args.TargetFile,
+    }
+    results, err := masscanrunner.Run(opts)
+    if err != nil {
+        return err
+    }
+    for _, r := range results {
+        if r.Proto != "" {
+            logger.Infof("%s:%d/%s", r.IP, r.Port, r.Proto)
+        } else {
+            logger.Infof("%s:%d", r.IP, r.Port)
+        }
+    }
+    logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
+    return nil
+}
+
 // createFingerprintAddon 创建指纹识别插件
 func createFingerprintAddon() (*fingerprint.FingerprintAddon, error) {
 	addon, err := fingerprint.CreateDefaultAddon()
@@ -949,22 +1027,22 @@ func startApplication(args *CLIArgs) error {
 	logger.Debug("开始启动指定的模块...")
 
 	// 启动指纹识别模块
-    if args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
-        // 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
-        fingerprint.SetGlobalAddon(app.fingerprintAddon)
-        app.fingerprintAddon.Enable()
+	if args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
+		// 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
+		fingerprint.SetGlobalAddon(app.fingerprintAddon)
+		app.fingerprintAddon.Enable()
 
-        // 使 -vv 在被动模式下生效：控制片段输出
-        app.fingerprintAddon.EnableSnippet(args.VeryVerbose)
+		// 使 -vv 在被动模式下生效：控制片段输出
+		app.fingerprintAddon.EnableSnippet(args.VeryVerbose)
 
-        // 将指纹识别addon添加到代理服务器
-        app.proxy.AddAddon(app.fingerprintAddon)
-        logger.Debug("指纹识别addon已添加到代理服务器")
-        logger.Debug("指纹识别模块启动成功")
-    }
+		// 将指纹识别addon添加到代理服务器
+		app.proxy.AddAddon(app.fingerprintAddon)
+		logger.Debug("指纹识别addon已添加到代理服务器")
+		logger.Debug("指纹识别模块启动成功")
+	}
 
 	// 启动目录扫描模块
-    if args.HasModule(string(modulepkg.ModuleDirscan)) && app.dirscanModule != nil {
+	if args.HasModule(string(modulepkg.ModuleDirscan)) && app.dirscanModule != nil {
 		if err := app.dirscanModule.Start(); err != nil {
 			logger.Errorf("启动目录扫描模块失败: %v", err)
 		} else {
@@ -975,7 +1053,7 @@ func startApplication(args *CLIArgs) error {
 	// 执行模块间依赖注入
 	if app.fingerprintAddon != nil {
 		// 使用HTTP客户端工厂创建客户端（代码质量优化）
-		userAgent := "veo-CLI/1.0"
+		userAgent := "Moziilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
 		httpClient := httpclient.CreateClientWithUserAgent(userAgent)
 
 		// 注入到指纹识别模块
@@ -994,8 +1072,8 @@ func displayStartupInfo(args *CLIArgs) {
 
 `)
 	logger.Debugf("模块状态:")
-    logger.Debugf("指纹识别: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleFinger))))
-    logger.Debugf("目录扫描: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleDirscan))))
+	logger.Debugf("指纹识别: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleFinger))))
+	logger.Debugf("目录扫描: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleDirscan))))
 }
 
 // StartProxy 启动代理服务器
@@ -1011,12 +1089,12 @@ func (app *CLIApp) StartProxy() error {
 	}
 
 	// 只在启用目录扫描模块时添加collector
-    if app.args.HasModule(string(modulepkg.ModuleDirscan)) && app.collector != nil {
+	if app.args.HasModule(string(modulepkg.ModuleDirscan)) && app.collector != nil {
 		app.proxy.AddAddon(app.collector)
 	}
 
 	// 根据启用的模块添加插件
-    if app.args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
+	if app.args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
 		app.proxy.AddAddon(app.fingerprintAddon)
 	}
 
@@ -1102,7 +1180,7 @@ func cleanup() {
 
 // runActiveScanMode 运行主动扫描模式
 func runActiveScanMode(args *CLIArgs) error {
-	logger.Debug("启动主动扫描模式")
+    logger.Debug("启动主动扫描模式")
 
 	// [修复] 使用已经应用了CLI参数的全局配置，而不是重新加载配置文件
 	// 这样可以确保CLI参数（如-t线程数）能够正确生效

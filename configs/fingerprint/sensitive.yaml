@@ -262,19 +262,6 @@ IBM-Cloud:
   dsl:
   - regex(body, '(LTAI[A-Za-z0-9]{12,20})')
 
-华为云:
-  dsl:
-  - regex(body, '(AK[\w\W]{10,62})')
-  - regex(body, '([A-Z0-9]{20}$)')
-
-百度云:
-  dsl:
-  - regex(body, '(AK[A-Za-z0-9]{10,40})')
-
-京东云:
-  dsl:
-  - regex(body, '(JDC_[A-Z0-9]{28,32})')
-
 字节跳动火山引擎:
   dsl:
   - regex(body, '(AKLT[a-zA-Z0-9-_]{0,252})')
@@ -282,22 +269,6 @@ IBM-Cloud:
 UCloud:
   dsl:
   - regex(body, '(UC[A-Za-z0-9]{10,40})')
-
-青云:
-  dsl:
-  - regex(body, '(QY[A-Za-z0-9]{10,40})')
-
-金山云:
-  dsl:
-  - regex(body, '(AKLT[a-zA-Z0-9-_]{16,28})')
-
-联通云:
-  dsl:
-  - regex(body, '(LTC[A-Za-z0-9]{10,60})')
-
-电信云:
-  dsl:
-  - regex(body, '(CTC[A-Za-z0-9]{10,60})')
 
 一云通:
   dsl:

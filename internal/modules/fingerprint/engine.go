@@ -147,19 +147,33 @@ func (e *Engine) LoadRules(rulesPath string) error {
 		yamlFiles = append(yamlFiles, rulesPath)
 	}
 
-	// 加载所有YAML文件
-	totalRulesLoaded := 0
-	for _, yamlFile := range yamlFiles {
-		count, err := e.loadSingleYAMLFile(yamlFile)
-		if err != nil {
-			logger.Warnf("加载指纹库文件失败: %s, 错误: %v", filepath.Base(yamlFile), err)
-			continue
-		}
-		logger.Infof("Loaded FingerPrint Rules: %s:%d", filepath.Base(yamlFile), count)
-		totalRulesLoaded += count
-	}
-	e.stats.RulesLoaded = totalRulesLoaded
-	return nil
+    // 加载所有YAML文件
+    e.loadedSummaries = nil
+    totalRulesLoaded := 0
+    for _, yamlFile := range yamlFiles {
+        count, err := e.loadSingleYAMLFile(yamlFile)
+        if err != nil {
+            logger.Warnf("加载指纹库文件失败: %s, 错误: %v", filepath.Base(yamlFile), err)
+            continue
+        }
+        summary := fmt.Sprintf("%s:%d", filepath.Base(yamlFile), count)
+        e.loadedSummaries = append(e.loadedSummaries, summary)
+        // 降级为调试日志，避免在模块启动前重复打印
+        logger.Debugf("Loaded FingerPrint Rules: %s", summary)
+        totalRulesLoaded += count
+    }
+    e.stats.RulesLoaded = totalRulesLoaded
+    return nil
+}
+
+// GetLoadedSummaryString 返回已加载规则文件的摘要字符串
+// 例如："finger.yaml:754 sensitive.yaml:47"
+// 参数：无
+// 返回：摘要字符串，若无则返回空字符串
+func (e *Engine) GetLoadedSummaryString() string {
+    e.mu.RLock()
+    defer e.mu.RUnlock()
+    return strings.Join(e.loadedSummaries, " ")
 }
 
 // loadSingleYAMLFile 加载单个YAML文件
@@ -832,16 +846,17 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 				}
 				snippetLines = append(snippetLines, highlighted)
 			}
-			if len(snippetLines) > 0 {
-				logMsg.WriteString("\n")
-				for idx, snippetLine := range snippetLines {
-					if idx > 0 {
-						logMsg.WriteString("\n")
-					}
-					logMsg.WriteString("  ⮕  ")
-					logMsg.WriteString(snippetLine)
-				}
-			}
+                if len(snippetLines) > 0 {
+                    logMsg.WriteString("\n")
+                    for idx, snippetLine := range snippetLines {
+                        if idx > 0 {
+                            logMsg.WriteString("\n")
+                        }
+                        logMsg.WriteString("  ")
+                        logMsg.WriteString(formatter.FormatSnippetArrow())
+                        logMsg.WriteString(snippetLine)
+                    }
+                }
 		}
 
 		logger.Info(logMsg.String())

@@ -580,7 +580,8 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 					if idx > 0 {
 						messageBuilder.WriteString("\n")
 					}
-					messageBuilder.WriteString("  ⮕  ")
+					messageBuilder.WriteString("  ")
+					messageBuilder.WriteString(formatter.FormatSnippetArrow())
 					messageBuilder.WriteString(snippetLine)
 				}
 			}

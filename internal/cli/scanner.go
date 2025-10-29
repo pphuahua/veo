@@ -485,7 +485,15 @@ func (sc *ScanController) runModuleForTargets(moduleName string, targets []strin
 
 // runDirscanModule 运行目录扫描模块（[重要] 多目标并发优化）
 func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPResponse, error) {
-	logger.Debugf("开始目录扫描，目标数量: %d", len(targets))
+    // 模块启动提示
+    dictInfo := "dict/common.txt"
+    if sc.args != nil && strings.TrimSpace(sc.args.Wordlist) != "" {
+        dictInfo = sc.args.Wordlist
+    }
+    // 模块开始前空行，提升可读性
+    fmt.Println()
+    logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Dirscan, Loaded Dict: %s", dictInfo)))
+    logger.Debugf("开始目录扫描，目标数量: %d", len(targets))
 
 	// [重要] 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
 	if len(targets) > 1 {
@@ -608,7 +616,20 @@ func (sc *ScanController) runSequentialDirscan(targets []string) ([]interfaces.H
 
 // runFingerprintModule 运行指纹识别模块（[重要] 多目标并发优化）
 func (sc *ScanController) runFingerprintModule(targets []string) ([]interfaces.HTTPResponse, error) {
-	logger.Debugf("开始指纹识别，数量: %d", len(targets))
+    // 模块启动提示
+    // 模块开始前空行，提升可读性
+    fmt.Println()
+    if sc.fingerprintEngine != nil {
+        summary := sc.fingerprintEngine.GetLoadedSummaryString()
+        if summary != "" {
+            logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start FingerPrint, Loaded FingerPrint Rules: %s", summary)))
+        } else {
+            logger.Infof("%s", formatter.FormatBold("Start FingerPrint"))
+        }
+    } else {
+        logger.Infof("%s", formatter.FormatBold("Start FingerPrint"))
+    }
+    logger.Debugf("开始指纹识别，数量: %d", len(targets))
 
 	// [重要] 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
 	if len(targets) > 1 {
@@ -1307,7 +1328,7 @@ func (sc *ScanController) performPathProbing(targets []string) {
 // createHTTPClientAdapter 创建HTTP客户端（支持TLS和重定向）
 func (sc *ScanController) createHTTPClientAdapter() httpclient.HTTPClientInterface {
 	// 使用HTTP客户端工厂（代码质量优化）
-	userAgent := "veo-Scanner/1.0"
+	userAgent := "Moziilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
 	return httpclient.CreateClientWithUserAgent(userAgent)
 }
 
@@ -1724,8 +1745,9 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 				if idx > 0 {
 					builder.WriteString("\n")
 				}
-				builder.WriteString("  ⮕  ")
-				builder.WriteString(snippetLine)
+                builder.WriteString("  ")
+                builder.WriteString(formatter.FormatSnippetArrow())
+                builder.WriteString(snippetLine)
 			}
 		}
 
