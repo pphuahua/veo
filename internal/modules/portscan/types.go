@@ -7,9 +7,8 @@ package portscan
 //   - Proto: 协议（tcp/udp），若不可用可为空
 // 返回：无
 type OpenPortResult struct {
-    IP    string `json:"ip"`
-    Port  int    `json:"port"`
-    Proto string `json:"proto"`
+    IP   string `json:"ip"`
+    Port int    `json:"port"`
 }
 
 // Options 端口扫描选项
@@ -25,4 +24,3 @@ type Options struct {
     Targets    []string
     TargetFile string
 }
-

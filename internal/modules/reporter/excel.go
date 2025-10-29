@@ -1,12 +1,13 @@
 package report
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
+    "fmt"
+    "os"
+    "path/filepath"
+    "strings"
+    "veo/internal/core/interfaces"
+    "veo/internal/core/logger"
+    portscanpkg "veo/internal/modules/portscan"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -56,6 +57,57 @@ func GenerateExcelReport(filterResult *interfaces.FilterResult, reportType Excel
 
 	logger.Infof("Excel Report: %s", outputPath)
 	return outputPath, nil
+}
+
+// GenerateExcelReportWithPorts 生成包含端口扫描结果的 Excel 报告（合并表格）
+// 对于端口结果，将 "IP:Port" 写入 URL 列，其他列留空
+func GenerateExcelReportWithPorts(filterResult *interfaces.FilterResult, reportType ExcelReportType, ports []portscanpkg.OpenPortResult, outputPath string) (string, error) {
+    if filterResult == nil {
+        return "", fmt.Errorf("过滤结果为空")
+    }
+
+    logger.Debugf("开始生成包含端口结果的 Excel 报告: %s", outputPath)
+
+    rows := buildExcelRows(filterResult, reportType)
+
+    headers := excelHeaders(reportType)
+
+    // 将端口扫描结果附加到行尾
+    if len(ports) > 0 {
+        // 端口结果使用 URL 列，其他列置空
+        colCount := len(headers)
+        for _, r := range ports {
+            row := make([]interface{}, colCount)
+            if colCount > 0 {
+                row[0] = fmt.Sprintf("%s:%d", r.IP, r.Port)
+            }
+            rows = append(rows, row)
+        }
+    }
+
+    file := excelize.NewFile()
+    sheetName := "Report"
+    file.SetSheetName(file.GetSheetName(0), sheetName)
+
+    for idx, header := range headers {
+        cell, _ := excelize.CoordinatesToCellName(idx+1, 1)
+        file.SetCellValue(sheetName, cell, header)
+    }
+
+    for rowIdx, row := range rows {
+        cell, _ := excelize.CoordinatesToCellName(1, rowIdx+2)
+        rowCopy := row
+        file.SetSheetRow(sheetName, cell, &rowCopy)
+    }
+
+    if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+        return "", fmt.Errorf("创建输出目录失败: %w", err)
+    }
+    if err := file.SaveAs(outputPath); err != nil {
+        return "", fmt.Errorf("保存 Excel 报告失败: %w", err)
+    }
+    logger.Infof("Excel Report: %s", outputPath)
+    return outputPath, nil
 }
 
 func excelHeaders(reportType ExcelReportType) []string {

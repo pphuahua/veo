@@ -16,17 +16,25 @@ import (
 type SDKResult struct {
 	Summary            SDKSummary      `json:"summary"`
 	DirscanResults     []SDKPageResult `json:"dirscan_results,omitempty"`
-	FingerprintTargets []SDKPageResult `json:"fingerprint_targets,omitempty"`
+	FingerprintTargets []SDKPageResult `json:"fingerprint_results,omitempty"`
+	PortscanResults    []SDKPortResult `json:"portscan_results,omitempty"`
 }
 
 type SDKSummary struct {
 	Total                   int   `json:"total"`
 	DirscanCount            int   `json:"dirscan_count"`
 	FingerprintCount        int   `json:"fingerprint_count"`
+	PortscanCount           int   `json:"portscan_count"`
 	DurationMs              int64 `json:"duration_ms"`
 	FingerprintRules        int   `json:"fingerprint_rules"`
 	DirTargetsCount         int   `json:"dir_targets_count"`
 	FingerprintTargetsCount int   `json:"fingerprint_targets_count"`
+}
+
+// SDKPortResult 端口扫描结果（用于合并报告）
+type SDKPortResult struct {
+	IP   string   `json:"ip"`
+	Port []string `json:"port"`
 }
 
 type SDKPageResult struct {
@@ -69,13 +77,13 @@ func NewCustomJSONReportGenerator(outputPath string) *JSONReportGenerator {
 // GenerateDirscanReport 生成目录扫描JSON报告
 func (jrg *JSONReportGenerator) GenerateDirscanReport(filterResult *interfaces.FilterResult, target string, scanParams map[string]interface{}) (string, error) {
 	dirPages := extractResponses(filterResult)
-	result := jrg.buildSDKResult(dirPages, nil, nil, nil, scanParams)
+	result := jrg.buildSDKResult(dirPages, nil, nil, nil, nil, scanParams)
 	return jrg.saveSDKResult(result, target, "dirscan")
 }
 
 // GenerateFingerprintReport 生成指纹识别JSON报告
 func (jrg *JSONReportGenerator) GenerateFingerprintReport(responses []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, target string, scanParams map[string]interface{}) (string, error) {
-	result := jrg.buildSDKResult(nil, responses, matches, stats, scanParams)
+	result := jrg.buildSDKResult(nil, responses, matches, stats, nil, scanParams)
 	return jrg.saveSDKResult(result, target, "fingerprint")
 }
 
@@ -143,14 +151,21 @@ func GenerateCustomJSONFingerprintReport(responses []interfaces.HTTPResponse, ma
 	return generator.GenerateFingerprintReport(responses, matches, stats, target, scanParams)
 }
 
-func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, scanParams map[string]interface{}) (string, error) {
+func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, scanParams map[string]interface{}) (string, error) {
 	generator := NewJSONReportGenerator()
-	result := generator.buildSDKResult(dirPages, fingerprintPages, matches, stats, scanParams)
+	result := generator.buildSDKResult(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("JSON序列化失败: %v", err)
 	}
 	return string(data), nil
+}
+
+// GenerateCustomCombinedJSON 生成合并JSON报告（写入指定文件）
+func GenerateCustomCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, target string, scanParams map[string]interface{}, outputPath string) (string, error) {
+	jrg := NewCustomJSONReportGenerator(outputPath)
+	result := jrg.buildSDKResult(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
+	return jrg.saveSDKResult(result, target, "combined")
 }
 
 // extractResponses 提取过滤结果中的有效页面
@@ -170,16 +185,18 @@ func extractResponses(filterResult *interfaces.FilterResult) []interfaces.HTTPRe
 }
 
 // buildSDKResult 根据输入数据构建与SDK一致的结果结构
-func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, scanParams map[string]interface{}) *SDKResult {
+func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, scanParams map[string]interface{}) *SDKResult {
 	dirResults := makeDirscanPageResults(dirPages)
 	fpResults := makeFingerprintPageResults(fpPages, matches)
+	pr := portResults
 
 	duration := time.Since(jrg.startTime).Milliseconds()
 
 	summary := SDKSummary{
-		Total:                   len(dirResults) + len(fpResults),
+		Total:                   len(dirResults) + len(fpResults) + len(pr),
 		DirscanCount:            len(dirResults),
 		FingerprintCount:        len(fpResults),
+		PortscanCount:           len(pr),
 		DurationMs:              duration,
 		FingerprintRules:        rulesLoaded(stats, scanParams),
 		DirTargetsCount:         intFromParams(scanParams, "dir_targets_count", len(dirResults)),
@@ -190,6 +207,7 @@ func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPRespons
 		Summary:            summary,
 		DirscanResults:     dirResults,
 		FingerprintTargets: fpResults,
+		PortscanResults:    pr,
 	}
 }
 

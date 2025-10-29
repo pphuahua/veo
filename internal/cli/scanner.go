@@ -17,6 +17,8 @@ import (
 	"veo/internal/core/interfaces"
 	modulepkg "veo/internal/core/module"
 	"veo/internal/modules/fingerprint"
+	portscanpkg "veo/internal/modules/portscan"
+	masscanrunner "veo/internal/modules/portscan/masscan"
 	report "veo/internal/modules/reporter"
 	"veo/internal/utils/batch"
 	"veo/internal/utils/filter"
@@ -103,6 +105,10 @@ type ScanController struct {
 	statsDisplay           *stats.StatsDisplay            // 统计显示器
 	lastTargets            []string                       // 最近解析的目标列表
 	showFingerprintSnippet bool                           // 是否展示指纹匹配内容
+
+	// 缓存最近一次各模块结果（用于合并报告落盘）
+	lastDirscanResults     []interfaces.HTTPResponse
+	lastFingerprintResults []interfaces.HTTPResponse
 }
 
 // NewScanController 创建扫描控制器
@@ -296,20 +302,16 @@ func (sc *ScanController) runActiveMode() error {
 		}
 	}
 
-	// 生成报告（支持指纹识别和目录扫描的JSON/HTML输出）
+	// 缓存最近一次结果（用于后续合并报告输出）
+	sc.lastDirscanResults = dirscanResults
+	sc.lastFingerprintResults = fingerprintResults
+
+	// 生成报告（支持指纹识别、目录扫描和端口扫描的JSON/Excel输出）
+	// 调整：只要指定了 --output，即生成报告；
+	// 当输出为 .json 且指定了 -p 时，generateCustomReport 内部会输出“合并 JSON”（dir + finger + port）。
 	if sc.args.Output != "" {
-		if onlyFingerprint {
-			// 指纹识别模式：生成指纹识别报告
-			err = sc.generateReport(filterResult)
-			if err != nil {
-				logger.Errorf("指纹识别报告生成失败: %v", err)
-			}
-		} else if len(filterResult.ValidPages) > 0 {
-			// 目录扫描模式：仅在有有效结果时生成报告
-			err = sc.generateReport(filterResult)
-			if err != nil {
-				logger.Errorf("目录扫描报告生成失败: %v", err)
-			}
+		if err = sc.generateReport(filterResult); err != nil {
+			logger.Errorf("报告生成失败: %v", err)
 		}
 	}
 
@@ -385,8 +387,47 @@ func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []inter
 	}
 
 	params := sc.buildScanParams()
-	return report.GenerateCombinedJSON(dirPages, fingerprintPages, matches, stats, params)
+
+    // 若请求包含端口扫描参数，则在JSON输出时合并端口结果（复用统一收集函数，避免重复实现）
+    var portResults []report.SDKPortResult
+    if strings.TrimSpace(sc.args.Ports) != "" {
+        if _, agg := sc.collectPortResults(); agg != nil {
+            portResults = agg
+        }
+    }
+
+	return report.GenerateCombinedJSON(dirPages, fingerprintPages, matches, stats, portResults, params)
 }
+
+// collectPortResults 运行 masscan 收集端口结果（返回原始与聚合两种形态）
+// 参数：无（依赖 sc.args）
+// 返回：
+//   - []portscanpkg.OpenPortResult 原始结果
+//   - []report.SDKPortResult 聚合为每个IP一个条目的端口数组
+func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []report.SDKPortResult) {
+    if strings.TrimSpace(sc.args.Ports) == "" {
+        return nil, nil
+    }
+    effectiveRate := sc.args.Rate
+    if effectiveRate <= 0 { effectiveRate = 10000 }
+    portsExpr := strings.TrimSpace(sc.args.Ports)
+    var targets []string
+    if strings.TrimSpace(sc.args.TargetFile) == "" {
+        if ips, err := masscanrunner.ResolveTargetsToIPs(sc.args.Targets); err == nil {
+            targets = ips
+        }
+    }
+    opts := portscanpkg.Options{Ports: portsExpr, Rate: effectiveRate, Targets: targets, TargetFile: sc.args.TargetFile}
+    results, err := masscanrunner.Run(opts)
+    if err != nil {
+        logger.Errorf("端口扫描合并失败: %v", err)
+        return nil, nil
+    }
+    return results, aggregatePortResults(results)
+}
+
+// aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口数组）
+// aggregatePortResults (scanner) 移至 cli.go，避免重复定义
 
 // parseTargets 解析目标列表（支持命令行参数和文件输入）
 func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
@@ -485,15 +526,15 @@ func (sc *ScanController) runModuleForTargets(moduleName string, targets []strin
 
 // runDirscanModule 运行目录扫描模块（[重要] 多目标并发优化）
 func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPResponse, error) {
-    // 模块启动提示
-    dictInfo := "dict/common.txt"
-    if sc.args != nil && strings.TrimSpace(sc.args.Wordlist) != "" {
-        dictInfo = sc.args.Wordlist
-    }
-    // 模块开始前空行，提升可读性
-    fmt.Println()
-    logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Dirscan, Loaded Dict: %s", dictInfo)))
-    logger.Debugf("开始目录扫描，目标数量: %d", len(targets))
+	// 模块启动提示
+	dictInfo := "dict/common.txt"
+	if sc.args != nil && strings.TrimSpace(sc.args.Wordlist) != "" {
+		dictInfo = sc.args.Wordlist
+	}
+	// 模块开始前空行，提升可读性
+	fmt.Println()
+	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Dirscan, Loaded Dict: %s", dictInfo)))
+	logger.Debugf("开始目录扫描，目标数量: %d", len(targets))
 
 	// [重要] 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
 	if len(targets) > 1 {
@@ -616,20 +657,20 @@ func (sc *ScanController) runSequentialDirscan(targets []string) ([]interfaces.H
 
 // runFingerprintModule 运行指纹识别模块（[重要] 多目标并发优化）
 func (sc *ScanController) runFingerprintModule(targets []string) ([]interfaces.HTTPResponse, error) {
-    // 模块启动提示
-    // 模块开始前空行，提升可读性
-    fmt.Println()
-    if sc.fingerprintEngine != nil {
-        summary := sc.fingerprintEngine.GetLoadedSummaryString()
-        if summary != "" {
-            logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start FingerPrint, Loaded FingerPrint Rules: %s", summary)))
-        } else {
-            logger.Infof("%s", formatter.FormatBold("Start FingerPrint"))
-        }
-    } else {
-        logger.Infof("%s", formatter.FormatBold("Start FingerPrint"))
-    }
-    logger.Debugf("开始指纹识别，数量: %d", len(targets))
+	// 模块启动提示
+	// 模块开始前空行，提升可读性
+	fmt.Println()
+	if sc.fingerprintEngine != nil {
+		summary := sc.fingerprintEngine.GetLoadedSummaryString()
+		if summary != "" {
+			logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start FingerPrint, Loaded FingerPrint Rules: %s", summary)))
+		} else {
+			logger.Infof("%s", formatter.FormatBold("Start FingerPrint"))
+		}
+	} else {
+		logger.Infof("%s", formatter.FormatBold("Start FingerPrint"))
+	}
+	logger.Debugf("开始指纹识别，数量: %d", len(targets))
 
 	// [重要] 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
 	if len(targets) > 1 {
@@ -960,16 +1001,65 @@ func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) 
 func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterResult, outputPath string) (string, error) {
 	logger.Debugf("开始生成自定义报告到: %s", outputPath)
 
-	// 准备报告数据
-	target := strings.Join(sc.args.Targets, ",")
+    // 准备报告数据（JSON分支直接复用控制台JSON构建，无需target）
 
 	lowerOutput := strings.ToLower(outputPath)
 	// 根据文件扩展名选择报告格式
-	switch {
-	case strings.HasSuffix(lowerOutput, ".json"):
-		return sc.generateJSONReport(filterResult, target, outputPath)
+    switch {
+    case strings.HasSuffix(lowerOutput, ".json"):
+        // JSON：若包含 -p，运行端口扫描并在控制台打印指示器与端口结果；然后统一构建合并JSON并落盘
+        var pr []report.SDKPortResult
+        if strings.TrimSpace(sc.args.Ports) != "" {
+            // 计算有效速率与端口表达式（用于指示器输出）
+            effectiveRate := sc.args.Rate
+            if effectiveRate <= 0 { effectiveRate = 10000 }
+            portsExpr := strings.TrimSpace(sc.args.Ports)
+
+            // 执行端口扫描（一次），复用结果：控制台打印 + 合并JSON
+            results, agg := sc.collectPortResults()
+            pr = agg
+
+            // 控制台打印（一致的指示器与端口行）
+            fmt.Println()
+            logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
+            for _, r := range results { logger.Infof("%s:%d", r.IP, r.Port) }
+            logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
+        }
+
+        // 指纹匹配信息
+        var matches []*fingerprint.FingerprintMatch
+        var stats *fingerprint.Statistics
+        if sc.fingerprintEngine != nil {
+            matches = sc.fingerprintEngine.GetMatches()
+            stats = sc.fingerprintEngine.GetStats()
+        }
+        params := sc.buildScanParams()
+
+        // 复用合并JSON构建器，写入指定路径
+        jsonStr, err := report.GenerateCombinedJSON(sc.lastDirscanResults, sc.lastFingerprintResults, matches, stats, pr, params)
+        if err != nil { return "", err }
+        if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil { return "", fmt.Errorf("创建输出目录失败: %v", err) }
+        if err := os.WriteFile(outputPath, []byte(jsonStr), 0o644); err != nil { return "", fmt.Errorf("写入JSON文件失败: %v", err) }
+        return outputPath, nil
 	case strings.HasSuffix(lowerOutput, ".xlsx"):
 		reportType := determineExcelReportType(sc.args.Modules)
+		// 若包含端口扫描参数，则合并端口结果到 Excel
+		if strings.TrimSpace(sc.args.Ports) != "" {
+			// 准备 masscan 选项（与控制台JSON相同）
+			portsExpr := strings.TrimSpace(sc.args.Ports)
+			var targets []string
+			if strings.TrimSpace(sc.args.TargetFile) == "" {
+				if ips, err := masscanrunner.ResolveTargetsToIPs(sc.args.Targets); err == nil {
+					targets = ips
+				}
+			}
+			opts := portscanpkg.Options{Ports: portsExpr, Targets: targets, TargetFile: sc.args.TargetFile}
+			if results, err := masscanrunner.Run(opts); err == nil {
+				return report.GenerateExcelReportWithPorts(filterResult, reportType, results, outputPath)
+			} else {
+				logger.Errorf("端口扫描失败，Excel合并不包含端口: %v", err)
+			}
+		}
 		return report.GenerateExcelReport(filterResult, reportType, outputPath)
 	default:
 		reportType := determineExcelReportType(sc.args.Modules)
@@ -1745,9 +1835,9 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 				if idx > 0 {
 					builder.WriteString("\n")
 				}
-                builder.WriteString("  ")
-                builder.WriteString(formatter.FormatSnippetArrow())
-                builder.WriteString(snippetLine)
+				builder.WriteString("  ")
+				builder.WriteString(formatter.FormatSnippetArrow())
+				builder.WriteString(snippetLine)
 			}
 		}
 

@@ -18,11 +18,11 @@ import (
 
 // masscanJSONRecord 对应 -oJ 的单行JSON结构
 type masscanJSONRecord struct {
-	IP    string `json:"ip"`
-	Ports []struct {
-		Port  int    `json:"port"`
-		Proto string `json:"proto"`
-	} `json:"ports"`
+    IP    string `json:"ip"`
+    Ports []struct {
+        Port  int    `json:"port"`
+        Proto string `json:"proto"` // 解析但不使用
+    } `json:"ports"`
 }
 
 // Run 执行 masscan 扫描（使用内嵌二进制落地的方式）
@@ -136,21 +136,12 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 			var rec masscanJSONRecord
 			if json.Unmarshal([]byte(line), &rec) == nil {
 				for _, p := range rec.Ports {
-					results = append(results, portscan.OpenPortResult{IP: rec.IP, Port: p.Port, Proto: p.Proto})
-				}
-			}
-		}
+                    results = append(results, portscan.OpenPortResult{IP: rec.IP, Port: p.Port})
+                }
+            }
+        }
 		_ = file.Close()
 		_ = os.Remove(outPath)
-	}
-
-	// 简单规范化输出：Windows 下不显示 /tcp 后缀也可
-	if runtime.GOOS == "windows" {
-		for i := range results {
-			if strings.EqualFold(results[i].Proto, "tcp") {
-				// no-op，保持
-			}
-		}
 	}
 
 	return results, nil

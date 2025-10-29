@@ -27,8 +27,9 @@ import (
 	"veo/proxy"
 
 	// "os/exec" // removed: masscan执行迁移至模块
-    portscanpkg "veo/internal/modules/portscan"
+    report "veo/internal/modules/reporter"
     masscanrunner "veo/internal/modules/portscan/masscan"
+    portscanpkg "veo/internal/modules/portscan"
     // neturl "net/url" // not used after logic change
 )
 
@@ -86,7 +87,7 @@ type CLIArgs struct {
 }
 
 // ValidModules 有效的模块列表（使用module包的类型定义）
-var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
+var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan), "port"}
 
 // CLIApp CLI应用程序
 type CLIApp struct {
@@ -134,8 +135,19 @@ func Execute() {
 	// 应用CLI参数到配置（包括--debug标志）
 	applyArgsToConfig(args)
 
-	//  提前显示启动信息，确保banner在所有日志输出之前显示
-	displayStartupInfo(args)
+    //  提前显示启动信息，确保banner在所有日志输出之前显示
+    displayStartupInfo(args)
+
+    // 仅端口扫描模式：-m port
+    if !args.Listen && args.HasModule("port") && len(args.Modules) == 1 {
+        if strings.TrimSpace(args.Ports) == "" {
+            logger.Fatalf("端口扫描模块需要指定 -p 端口范围，例如: -p 1-600,80,8001,800-900")
+        }
+        if err := runMasscanPortScan(args); err != nil {
+            logger.Fatalf("端口扫描失败: %v", err)
+        }
+        return
+    }
 
     // 保持既有逻辑：不携带 -p 时，按原有模块执行（目录扫描+指纹识别）。
     // 若携带 -p，则先执行正常扫描（目录扫描+指纹识别），结束后再执行端口扫描。
@@ -160,8 +172,8 @@ func Execute() {
         if err := runActiveScanMode(args); err != nil {
             logger.Fatalf("主动扫描失败: %v", err)
         }
-        // 若用户指定了 -p，则在正常扫描完成后执行端口扫描
-        if strings.TrimSpace(args.Ports) != "" {
+        // 若用户指定了 -p，则在正常扫描完成后执行端口扫描（仅当未输出合并JSON文件时）
+        if strings.TrimSpace(args.Ports) != "" && !args.JSONOutput && !strings.HasSuffix(strings.ToLower(args.Output), ".json") {
             if err := runMasscanPortScan(args); err != nil {
                 logger.Fatalf("端口扫描失败: %v", err)
             }
@@ -348,8 +360,10 @@ veo - 双模式安全扫描工具
         可用模块:
           - finger: 指纹识别模块
           - dirscan: 目录扫描模块
+          - port: 端口扫描模块（仅端口扫描）
         示例: -m finger              # 只启用指纹识别
               -m dirscan             # 只启用目录扫描
+              -m port               # 只启用端口扫描（需同时指定 -p）
               -m finger,dirscan      # 启用指纹识别和目录扫描（默认）
 
 可选参数:
@@ -567,7 +581,14 @@ func validateArgs(args *CLIArgs) error {
 		return fmt.Errorf("相似页面过滤容错阈值必须在0-500范围内，当前值: %d", args.FilterTolerance)
 	}
 
-	// 根据模式验证参数
+    // 端口扫描模块需要指定端口范围
+    if args.HasModule("port") && !args.Listen {
+        if strings.TrimSpace(args.Ports) == "" {
+            return fmt.Errorf("端口扫描模块需要指定 -p 端口范围，例如: -p 1-600,80,8001,800-900")
+        }
+    }
+
+    // 根据模式验证参数
 	if args.Listen {
 		// 被动代理模式：如果没有指定目标，设置默认值为 * (全部抓取)
 		if len(args.Targets) == 0 {
@@ -884,7 +905,7 @@ func applyArgsToConfig(args *CLIArgs) {
 		}
 	}
 
-	if args.FilterTolerance != -1 {
+    if args.FilterTolerance != -1 {
 		if customFilterConfig == nil {
 			customFilterConfig = filter.DefaultFilterConfig()
 		}
@@ -987,15 +1008,82 @@ func runMasscanPortScan(args *CLIArgs) error {
     if err != nil {
         return err
     }
-    for _, r := range results {
-        if r.Proto != "" {
-            logger.Infof("%s:%d/%s", r.IP, r.Port, r.Proto)
-        } else {
-            logger.Infof("%s:%d", r.IP, r.Port)
+    // --json 模式：输出合并JSON（仅包含 portscan_results）到控制台；如指定 --output .json，则写入相同内容
+    if args.JSONOutput {
+        pr := aggregatePortResults(results)
+        params := map[string]interface{}{
+            "ports": portsExpr,
+            "rate":  effectiveRate,
         }
+        jsonStr, jerr := report.GenerateCombinedJSON(nil, nil, nil, nil, pr, params)
+        if jerr != nil {
+            return jerr
+        }
+        fmt.Println(jsonStr)
+        if strings.TrimSpace(args.Output) != "" && strings.HasSuffix(strings.ToLower(args.Output), ".json") {
+            if err := os.MkdirAll(filepath.Dir(args.Output), 0o755); err != nil {
+                logger.Errorf("创建输出目录失败: %v", err)
+            } else if werr := os.WriteFile(args.Output, []byte(jsonStr), 0o644); werr != nil {
+                logger.Errorf("写入合并JSON失败: %v", werr)
+            }
+        }
+        return nil
+    }
+    for _, r := range results {
+        logger.Infof("%s:%d", r.IP, r.Port)
     }
     logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
+
+    // 若指定输出路径，则根据扩展名导出 JSON 或 Excel
+    if strings.TrimSpace(args.Output) != "" {
+        out := strings.TrimSpace(args.Output)
+        lower := strings.ToLower(out)
+        if strings.HasSuffix(lower, ".json") {
+            // 落盘合并JSON（仅包含 portscan_results），与 --json 控制台一致
+            pr := aggregatePortResults(results)
+            params := map[string]interface{}{"ports": portsExpr, "rate": effectiveRate}
+            if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+                logger.Errorf("创建输出目录失败: %v", err)
+            } else {
+                if jsonStr, jerr := report.GenerateCombinedJSON(nil, nil, nil, nil, pr, params); jerr != nil {
+                    logger.Errorf("生成合并JSON失败: %v", jerr)
+                } else if werr := os.WriteFile(out, []byte(jsonStr), 0o644); werr != nil {
+                    logger.Errorf("端口扫描合并JSON报告写入失败: %v", werr)
+                }
+            }
+        } else if strings.HasSuffix(lower, ".xlsx") {
+            if _, err := report.GeneratePortscanExcel(results, out); err != nil {
+                logger.Errorf("端口扫描Excel报告生成失败: %v", err)
+            }
+        } else {
+            logger.Warnf("未知的输出文件类型: %s (支持 .json/.xlsx)", out)
+        }
+    }
     return nil
+}
+
+// aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口字符串数组）
+func aggregatePortResults(results []portscanpkg.OpenPortResult) []report.SDKPortResult {
+    if len(results) == 0 {
+        return nil
+    }
+    m := make(map[string]map[int]struct{})
+    for _, r := range results {
+        if _, ok := m[r.IP]; !ok {
+            m[r.IP] = make(map[int]struct{})
+        }
+        m[r.IP][r.Port] = struct{}{}
+    }
+    out := make([]report.SDKPortResult, 0, len(m))
+    for ip, portsSet := range m {
+        ports := make([]int, 0, len(portsSet))
+        for p := range portsSet { ports = append(ports, p) }
+        for i := 0; i < len(ports); i++ { for j := i+1; j < len(ports); j++ { if ports[j] < ports[i] { ports[i], ports[j] = ports[j], ports[i] } } }
+        portStrs := make([]string, len(ports))
+        for i, p := range ports { portStrs[i] = strconv.Itoa(p) }
+        out = append(out, report.SDKPortResult{IP: ip, Port: portStrs})
+    }
+    return out
 }
 
 // createFingerprintAddon 创建指纹识别插件
