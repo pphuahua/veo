@@ -3058,10 +3058,11 @@ yzmcms:
   dsl:
     - "contains(body, 'aisino.kps.console')"
 
-用友-畅捷通oem:
+用友-畅捷通:
   dsl:
     - "contains(body, 'GNRemote.dll')"
     - "contains(body, 'Web_sc/login.gn')"
+    - "contains(body, '/tplus/view/login.html','location='/tplus/'','divAuthBeforeWatchCertificate')"
 
 用友软件:
   dsl:
