@@ -18,11 +18,22 @@ import (
 
 // masscanJSONRecord 对应 -oJ 的单行JSON结构
 type masscanJSONRecord struct {
-    IP    string `json:"ip"`
-    Ports []struct {
-        Port  int    `json:"port"`
-        Proto string `json:"proto"` // 解析但不使用
-    } `json:"ports"`
+	IP    string `json:"ip"`
+	Ports []struct {
+		Port  int    `json:"port"`
+		Proto string `json:"proto"` // 解析但不使用
+	} `json:"ports"`
+}
+
+// DefaultRate 端口扫描默认速率（包/秒）
+const DefaultRate = 5012
+
+// ComputeEffectiveRate 计算最终生效的扫描速率（<=0 时采用默认值）
+func ComputeEffectiveRate(rate int) int {
+    if rate <= 0 {
+        return DefaultRate
+    }
+    return rate
 }
 
 // Run 执行 masscan 扫描（使用内嵌二进制落地的方式）
@@ -41,18 +52,27 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	if strings.TrimSpace(opts.Ports) == "" {
 		return nil, fmt.Errorf("未指定端口表达式")
 	}
-	// 默认速率：若未指定，则使用10000
-	if opts.Rate <= 0 {
-		opts.Rate = 10000
-	}
+    // 默认速率：若未指定，则使用默认值
+    if opts.Rate <= 0 {
+        opts.Rate = DefaultRate
+    }
 	if len(opts.Targets) == 0 && strings.TrimSpace(opts.TargetFile) == "" {
 		return nil, fmt.Errorf("未指定目标 (-u 或 -f)")
 	}
 
 	// 解析端口并分片
-	chunks, err := buildPortChunks(opts.Ports, 10000)
-	if err != nil {
-		return nil, err
+	// 优化：若 -p 为单一连续范围（例如 1-5000 或 5000-50000），
+	// 则将该范围平均切分为 5 份以降低漏扫概率；
+	// 对于 1-65535 保持既有按 10000 切片策略。
+	var chunks []string
+	if a, b, ok := parseSinglePortRange(opts.Ports); ok && !(a == 1 && b == 65535) {
+		chunks = splitRangeIntoN(a, b, 5)
+	} else {
+		var err error
+		chunks, err = buildPortChunks(opts.Ports, 10000)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(chunks) == 0 {
 		return nil, errors.New("未解析到有效端口")
@@ -136,15 +156,76 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 			var rec masscanJSONRecord
 			if json.Unmarshal([]byte(line), &rec) == nil {
 				for _, p := range rec.Ports {
-                    results = append(results, portscan.OpenPortResult{IP: rec.IP, Port: p.Port})
-                }
-            }
-        }
+					results = append(results, portscan.OpenPortResult{IP: rec.IP, Port: p.Port})
+				}
+			}
+		}
 		_ = file.Close()
 		_ = os.Remove(outPath)
 	}
 
 	return results, nil
+}
+
+// parseSinglePortRange 尝试解析单一连续端口范围表达式，如 "a-b"
+// 返回：起始端口a，结束端口b，是否为单一范围
+func parseSinglePortRange(expr string) (int, int, bool) {
+	e := strings.TrimSpace(expr)
+	if e == "" || strings.Contains(e, ",") {
+		return 0, 0, false
+	}
+	if !strings.Contains(e, "-") {
+		// 非范围，仅单端口
+		v, err := strconv.Atoi(e)
+		if err != nil || v < 1 || v > 65535 {
+			return 0, 0, false
+		}
+		return v, v, true
+	}
+	parts := strings.SplitN(e, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	a, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	b, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || a < 1 || b < a || b > 65535 {
+		return 0, 0, false
+	}
+	return a, b, true
+}
+
+// splitRangeIntoN 将闭区间 [a,b] 平均切为 n 段，返回范围表达式切片
+func splitRangeIntoN(a, b, n int) []string {
+	if n <= 1 || a > b {
+		return []string{fmt.Sprintf("%d-%d", a, b)}
+	}
+	total := b - a + 1
+	base := total / n
+	rem := total % n
+	res := make([]string, 0, n)
+	cur := a
+	for i := 0; i < n; i++ {
+		size := base
+		if rem > 0 {
+			size++
+			rem--
+		}
+		if size <= 0 {
+			continue
+		}
+		start := cur
+		end := cur + size - 1
+		if start == end {
+			res = append(res, strconv.Itoa(start))
+		} else {
+			res = append(res, fmt.Sprintf("%d-%d", start, end))
+		}
+		cur = end + 1
+		if cur > b {
+			break
+		}
+	}
+	return res
 }
 
 // ResolveTargetsToIPs 将输入的目标（URL/域名/IP）解析为IP列表

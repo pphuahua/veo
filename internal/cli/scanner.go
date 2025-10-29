@@ -1,12 +1,8 @@
 package cli
 
 import (
-	"bytes"
-	"compress/flate"
-	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"regexp"
@@ -31,7 +27,7 @@ import (
 
 	"veo/internal/core/logger"
 
-	"github.com/andybalholm/brotli"
+	sharedutils "veo/internal/utils/shared"
 	"path/filepath"
 )
 
@@ -388,13 +384,13 @@ func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []inter
 
 	params := sc.buildScanParams()
 
-    // 若请求包含端口扫描参数，则在JSON输出时合并端口结果（复用统一收集函数，避免重复实现）
-    var portResults []report.SDKPortResult
-    if strings.TrimSpace(sc.args.Ports) != "" {
-        if _, agg := sc.collectPortResults(); agg != nil {
-            portResults = agg
-        }
-    }
+	// 若请求包含端口扫描参数，则在JSON输出时合并端口结果（复用统一收集函数，避免重复实现）
+	var portResults []report.SDKPortResult
+	if strings.TrimSpace(sc.args.Ports) != "" {
+		if _, agg := sc.collectPortResults(); agg != nil {
+			portResults = agg
+		}
+	}
 
 	return report.GenerateCombinedJSON(dirPages, fingerprintPages, matches, stats, portResults, params)
 }
@@ -405,25 +401,24 @@ func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []inter
 //   - []portscanpkg.OpenPortResult 原始结果
 //   - []report.SDKPortResult 聚合为每个IP一个条目的端口数组
 func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []report.SDKPortResult) {
-    if strings.TrimSpace(sc.args.Ports) == "" {
-        return nil, nil
-    }
-    effectiveRate := sc.args.Rate
-    if effectiveRate <= 0 { effectiveRate = 10000 }
-    portsExpr := strings.TrimSpace(sc.args.Ports)
-    var targets []string
-    if strings.TrimSpace(sc.args.TargetFile) == "" {
-        if ips, err := masscanrunner.ResolveTargetsToIPs(sc.args.Targets); err == nil {
-            targets = ips
-        }
-    }
-    opts := portscanpkg.Options{Ports: portsExpr, Rate: effectiveRate, Targets: targets, TargetFile: sc.args.TargetFile}
-    results, err := masscanrunner.Run(opts)
-    if err != nil {
-        logger.Errorf("端口扫描合并失败: %v", err)
-        return nil, nil
-    }
-    return results, aggregatePortResults(results)
+	if strings.TrimSpace(sc.args.Ports) == "" {
+		return nil, nil
+	}
+    effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
+	portsExpr := strings.TrimSpace(sc.args.Ports)
+	var targets []string
+	if strings.TrimSpace(sc.args.TargetFile) == "" {
+		if ips, err := masscanrunner.ResolveTargetsToIPs(sc.args.Targets); err == nil {
+			targets = ips
+		}
+	}
+	opts := portscanpkg.Options{Ports: portsExpr, Rate: effectiveRate, Targets: targets, TargetFile: sc.args.TargetFile}
+	results, err := masscanrunner.Run(opts)
+	if err != nil {
+		logger.Errorf("端口扫描合并失败: %v", err)
+		return nil, nil
+	}
+	return results, aggregatePortResults(results)
 }
 
 // aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口数组）
@@ -1001,46 +996,53 @@ func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) 
 func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterResult, outputPath string) (string, error) {
 	logger.Debugf("开始生成自定义报告到: %s", outputPath)
 
-    // 准备报告数据（JSON分支直接复用控制台JSON构建，无需target）
+	// 准备报告数据（JSON分支直接复用控制台JSON构建，无需target）
 
 	lowerOutput := strings.ToLower(outputPath)
 	// 根据文件扩展名选择报告格式
-    switch {
-    case strings.HasSuffix(lowerOutput, ".json"):
-        // JSON：若包含 -p，运行端口扫描并在控制台打印指示器与端口结果；然后统一构建合并JSON并落盘
-        var pr []report.SDKPortResult
-        if strings.TrimSpace(sc.args.Ports) != "" {
-            // 计算有效速率与端口表达式（用于指示器输出）
-            effectiveRate := sc.args.Rate
-            if effectiveRate <= 0 { effectiveRate = 10000 }
-            portsExpr := strings.TrimSpace(sc.args.Ports)
+	switch {
+	case strings.HasSuffix(lowerOutput, ".json"):
+		// JSON：若包含 -p，运行端口扫描并在控制台打印指示器与端口结果；然后统一构建合并JSON并落盘
+		var pr []report.SDKPortResult
+		if strings.TrimSpace(sc.args.Ports) != "" {
+			// 计算有效速率与端口表达式（用于指示器输出）
+            effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
+			portsExpr := strings.TrimSpace(sc.args.Ports)
 
-            // 执行端口扫描（一次），复用结果：控制台打印 + 合并JSON
-            results, agg := sc.collectPortResults()
-            pr = agg
+			// 执行端口扫描（一次），复用结果：控制台打印 + 合并JSON
+			results, agg := sc.collectPortResults()
+			pr = agg
 
-            // 控制台打印（一致的指示器与端口行）
-            fmt.Println()
-            logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
-            for _, r := range results { logger.Infof("%s:%d", r.IP, r.Port) }
-            logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
-        }
+			// 控制台打印（一致的指示器与端口行）
+			fmt.Println()
+			logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
+			for _, r := range results {
+				logger.Infof("%s:%d", r.IP, r.Port)
+			}
+			logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
+		}
 
-        // 指纹匹配信息
-        var matches []*fingerprint.FingerprintMatch
-        var stats *fingerprint.Statistics
-        if sc.fingerprintEngine != nil {
-            matches = sc.fingerprintEngine.GetMatches()
-            stats = sc.fingerprintEngine.GetStats()
-        }
-        params := sc.buildScanParams()
+		// 指纹匹配信息
+		var matches []*fingerprint.FingerprintMatch
+		var stats *fingerprint.Statistics
+		if sc.fingerprintEngine != nil {
+			matches = sc.fingerprintEngine.GetMatches()
+			stats = sc.fingerprintEngine.GetStats()
+		}
+		params := sc.buildScanParams()
 
-        // 复用合并JSON构建器，写入指定路径
-        jsonStr, err := report.GenerateCombinedJSON(sc.lastDirscanResults, sc.lastFingerprintResults, matches, stats, pr, params)
-        if err != nil { return "", err }
-        if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil { return "", fmt.Errorf("创建输出目录失败: %v", err) }
-        if err := os.WriteFile(outputPath, []byte(jsonStr), 0o644); err != nil { return "", fmt.Errorf("写入JSON文件失败: %v", err) }
-        return outputPath, nil
+		// 复用合并JSON构建器，写入指定路径
+		jsonStr, err := report.GenerateCombinedJSON(sc.lastDirscanResults, sc.lastFingerprintResults, matches, stats, pr, params)
+		if err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+			return "", fmt.Errorf("创建输出目录失败: %v", err)
+		}
+		if err := os.WriteFile(outputPath, []byte(jsonStr), 0o644); err != nil {
+			return "", fmt.Errorf("写入JSON文件失败: %v", err)
+		}
+		return outputPath, nil
 	case strings.HasSuffix(lowerOutput, ".xlsx"):
 		reportType := determineExcelReportType(sc.args.Modules)
 		// 若包含端口扫描参数，则合并端口结果到 Excel
@@ -1251,85 +1253,13 @@ func (sc *ScanController) decompressResponseBody(body string, headers map[string
 
 	// 获取Content-Encoding头部
 	var contentEncoding string
-	if encodingHeaders, exists := headers["Content-Encoding"]; exists && len(encodingHeaders) > 0 {
-		contentEncoding = strings.ToLower(encodingHeaders[0])
+	if headers != nil {
+		if encodingHeaders, exists := headers["Content-Encoding"]; exists && len(encodingHeaders) > 0 {
+			contentEncoding = encodingHeaders[0]
+		}
 	}
 
-	// 如果没有压缩，直接返回
-	if contentEncoding == "" {
-		return body
-	}
-
-	bodyBytes := []byte(body)
-
-	// 根据压缩类型进行解压缩
-	if strings.Contains(contentEncoding, "gzip") {
-		return sc.decompressGzip(bodyBytes)
-	} else if strings.Contains(contentEncoding, "deflate") {
-		return sc.decompressDeflate(bodyBytes)
-	} else if strings.Contains(contentEncoding, "br") {
-		return sc.decompressBrotli(bodyBytes)
-	}
-
-	// 不支持的压缩格式，返回原始内容
-	logger.Debugf("不支持的压缩格式: %s", contentEncoding)
-	return body
-}
-
-// decompressGzip 解压gzip压缩的响应体（复用fingerprint/addon.go的逻辑）
-func (sc *ScanController) decompressGzip(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	gzipReader, err := gzip.NewReader(reader)
-	if err != nil {
-		logger.Debugf("gzip解压失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-	defer gzipReader.Close()
-
-	decompressed, err := io.ReadAll(gzipReader)
-	if err != nil {
-		logger.Debugf("gzip读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("gzip解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
-}
-
-// decompressDeflate 解压deflate压缩的响应体
-func (sc *ScanController) decompressDeflate(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	deflateReader := flate.NewReader(reader)
-	defer deflateReader.Close()
-
-	decompressed, err := io.ReadAll(deflateReader)
-	if err != nil {
-		logger.Debugf("deflate读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("deflate解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
-}
-
-// decompressBrotli 解压brotli压缩的响应体
-func (sc *ScanController) decompressBrotli(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	brotliReader := brotli.NewReader(reader)
-
-	decompressed, err := io.ReadAll(brotliReader)
-	if err != nil {
-		logger.Debugf("brotli读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("brotli解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
+	decompressed := sharedutils.DecompressByEncoding([]byte(body), contentEncoding)
 	return string(decompressed)
 }
 

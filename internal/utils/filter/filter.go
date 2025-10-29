@@ -1,22 +1,17 @@
 package filter
 
 import (
-	"bytes"
-	"compress/flate"
-	"compress/gzip"
-	"fmt"
-	"io"
-	"reflect"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
-	"veo/internal/utils/filter/strategy"
-	"veo/internal/utils/formatter"
-
-	"github.com/andybalholm/brotli"
+    "fmt"
+    "reflect"
+    "strings"
+    "sync"
+    "sync/atomic"
+    "time"
+    "veo/internal/core/interfaces"
+    "veo/internal/core/logger"
+    "veo/internal/utils/filter/strategy"
+    "veo/internal/utils/formatter"
+    sharedutils "veo/internal/utils/shared"
 )
 
 // FilterConfig 过滤器配置（独立配置，不依赖外部config包）
@@ -912,77 +907,7 @@ func (rf *ResponseFilter) decompressResponseBody(body string, headers map[string
 		return body
 	}
 
-	logger.Debugf("检测到压缩编码: %s", contentEncoding)
-
-	bodyBytes := []byte(body)
-
-	// 根据压缩类型进行解压缩
-	if strings.Contains(contentEncoding, "gzip") {
-		return rf.decompressGzip(bodyBytes)
-	} else if strings.Contains(contentEncoding, "deflate") {
-		return rf.decompressDeflate(bodyBytes)
-	} else if strings.Contains(contentEncoding, "br") {
-		return rf.decompressBrotli(bodyBytes)
-	}
-
-	// 不支持的压缩格式，返回原始内容
-	logger.Debugf("不支持的压缩格式: %s", contentEncoding)
-	return body
-}
-
-// decompressGzip 解压gzip压缩的响应体
-func (rf *ResponseFilter) decompressGzip(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	gzipReader, err := gzip.NewReader(reader)
-	if err != nil {
-		logger.Debugf("gzip解压失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-	defer gzipReader.Close()
-
-	decompressed, err := io.ReadAll(gzipReader)
-	if err != nil {
-		logger.Debugf("gzip读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("gzip解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
-}
-
-// decompressDeflate 解压deflate压缩的响应体
-func (rf *ResponseFilter) decompressDeflate(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	deflateReader := flate.NewReader(reader)
-	defer deflateReader.Close()
-
-	decompressed, err := io.ReadAll(deflateReader)
-	if err != nil {
-		logger.Debugf("deflate读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("deflate解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
-}
-
-// decompressBrotli 解压brotli压缩的响应体
-func (rf *ResponseFilter) decompressBrotli(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	brotliReader := brotli.NewReader(reader)
-
-	decompressed, err := io.ReadAll(brotliReader)
-	if err != nil {
-		logger.Debugf("brotli读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("brotli解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
+    logger.Debugf("检测到压缩编码: %s", contentEncoding)
+    decompressed := sharedutils.DecompressByEncoding([]byte(body), contentEncoding)
+    return string(decompressed)
 }

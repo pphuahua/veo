@@ -1,21 +1,15 @@
 package fingerprint
 
 import (
-	"bytes"
-	"compress/flate"
-	"compress/gzip"
-	"fmt"
-	"io"
-	"net/url"
-	"strings"
-	"sync"
-	"veo/internal/core/config"
-	"veo/internal/core/logger"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/shared"
-	"veo/proxy"
-
-	"github.com/andybalholm/brotli"
+    "fmt"
+    "net/url"
+    "strings"
+    "sync"
+    "veo/internal/core/config"
+    "veo/internal/core/logger"
+    "veo/internal/utils/filter"
+    "veo/internal/utils/shared"
+    "veo/proxy"
 )
 
 // ===========================================
@@ -392,85 +386,14 @@ func CreateDefaultAddon() (*FingerprintAddon, error) {
 
 // extractAndDecompressBody 提取并解压响应体
 func (fa *FingerprintAddon) extractAndDecompressBody(f *proxy.Flow) string {
-	if f.Response.Body == nil {
-		return ""
-	}
-
-	rawBody := f.Response.Body
-
-	// 检查Content-Encoding并解压
-	contentEncoding := strings.ToLower(f.Response.Header.Get("Content-Encoding"))
-	var decompressedBody string
-
-	if strings.Contains(contentEncoding, "gzip") {
-		decompressedBody = fa.decompressGzipBody(rawBody)
-	} else if strings.Contains(contentEncoding, "deflate") {
-		decompressedBody = fa.decompressDeflateBody(rawBody)
-	} else if strings.Contains(contentEncoding, "br") {
-		decompressedBody = fa.decompressBrotliBody(rawBody)
-	} else {
-		decompressedBody = string(rawBody)
-	}
-
-	// 字符编码检测和转换
-	return fa.encodingDetector.DetectAndConvert(decompressedBody, f.Response.Header.Get("Content-Type"))
-}
-
-// decompressGzipBody 解压gzip压缩的响应体
-func (fa *FingerprintAddon) decompressGzipBody(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	gzipReader, err := gzip.NewReader(reader)
-	if err != nil {
-		logger.Debugf("gzip解压失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-	defer gzipReader.Close()
-
-	decompressed, err := io.ReadAll(gzipReader)
-	if err != nil {
-		logger.Debugf("gzip读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("gzip解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
-}
-
-// decompressBrotliBody 解压brotli压缩的响应体
-func (fa *FingerprintAddon) decompressBrotliBody(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	brotliReader := brotli.NewReader(reader)
-
-	decompressed, err := io.ReadAll(brotliReader)
-	if err != nil {
-		logger.Debugf("brotli读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("brotli解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
-}
-
-// decompressDeflateBody 解压deflate压缩的响应体
-func (fa *FingerprintAddon) decompressDeflateBody(compressedBody []byte) string {
-	reader := bytes.NewReader(compressedBody)
-	deflateReader := flate.NewReader(reader)
-	defer deflateReader.Close()
-
-	decompressed, err := io.ReadAll(deflateReader)
-	if err != nil {
-		logger.Debugf("deflate读取失败: %v, 返回原始内容", err)
-		return string(compressedBody)
-	}
-
-	logger.Debugf("deflate解压成功: %d bytes -> %d bytes",
-		len(compressedBody), len(decompressed))
-
-	return string(decompressed)
+    if f.Response.Body == nil {
+        return ""
+    }
+    rawBody := f.Response.Body
+    contentEncoding := f.Response.Header.Get("Content-Encoding")
+    decompressed := shared.DecompressByEncoding(rawBody, contentEncoding)
+    // 字符编码检测和转换
+    return fa.encodingDetector.DetectAndConvert(string(decompressed), f.Response.Header.Get("Content-Type"))
 }
 
 // ===========================================

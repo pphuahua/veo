@@ -971,10 +971,7 @@ func createProxy() (*proxy.Proxy, error) {
 
 // runMasscanPortScan 调用内嵌 masscan 扫描（模块化实现）
 func runMasscanPortScan(args *CLIArgs) error {
-    effectiveRate := args.Rate
-    if effectiveRate <= 0 {
-        effectiveRate = 10000
-    }
+    effectiveRate := masscanrunner.ComputeEffectiveRate(args.Rate)
 
     // 端口表达式：若未指定 -p 且未使用 -f，则从URL中推导（默认80/443或URL显式端口）
     portsExpr := strings.TrimSpace(args.Ports)
