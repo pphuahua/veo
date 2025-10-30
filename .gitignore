@@ -20,3 +20,4 @@ veo_darwin_arm64
 test.go
 /plans
 internal/modules/portscan/masscan/assets/README.txt
+paused.conf

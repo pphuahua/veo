@@ -1271,7 +1271,7 @@ waf:
 
 深信服atrust:
   dsl:
-    - "contains(body, 'isClient = /atrusttray')"
+    - "contains(body, 'isClient = /atrusttray','atrusttray','web/tray.html?page=error_network','_handlePageError, true')"
     - "contains(body, 'window.allModuleLoadSuccess')"
 
 金山企业安全终端防护优化系统:

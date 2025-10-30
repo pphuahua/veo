@@ -31,6 +31,11 @@ type masscanJSONRecord struct {
 // DefaultRate 端口扫描默认速率（包/秒）
 const DefaultRate = 5012
 
+const (
+	targetBatchSize  = 64
+	maxCIDRExpansion = 4096
+)
+
 // ComputeEffectiveRate 计算最终生效的扫描速率（<=0 时采用默认值）
 func ComputeEffectiveRate(rate int) int {
 	if rate <= 0 {
@@ -82,39 +87,14 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		return nil, errors.New("未解析到有效端口")
 	}
 
-	// 目标参数构造：
-	// 1) 若用户提供 -f 文件，使用 -iL <file>
-	// 2) 若通过 -u 指定且仅单个目标，直接追加到命令行（无需 -iL）
-	// 3) 若通过 -u 指定多个目标，则创建临时目标文件并使用 -iL
-	var targetArgs []string
-	targetsFile := strings.TrimSpace(opts.TargetFile)
-	if targetsFile != "" {
-		targetArgs = []string{"-iL", targetsFile}
-	} else if len(opts.Targets) == 1 {
-		target := strings.TrimSpace(opts.Targets[0])
-		if target == "" {
-			return nil, fmt.Errorf("目标无效")
-		}
-		targetArgs = []string{target}
-	} else {
-		// 多目标：创建临时目标文件
-		f, tfErr := os.CreateTemp("", "veo-masscan-targets-*.txt")
-		if tfErr != nil {
-			return nil, fmt.Errorf("创建临时目标文件失败: %v", tfErr)
-		}
-		defer os.Remove(f.Name())
-		w := bufio.NewWriter(f)
-		for _, t := range opts.Targets {
-			t = strings.TrimSpace(t)
-			if t == "" {
-				continue
-			}
-			_, _ = w.WriteString(t + "\n")
-		}
-		_ = w.Flush()
-		_ = f.Close()
-		targetArgs = []string{"-iL", f.Name()}
-		logger.Debugf("端口扫描：使用临时目标文件 %s", f.Name())
+	// 构建目标分组（支持多目标批量与临时文件处理）
+	targetGroups, cleanupTargets, err := buildTargetGroups(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupTargets()
+	if len(targetGroups) == 0 {
+		return nil, errors.New("未解析到有效目标")
 	}
 
 	// 落地内嵌二进制
@@ -124,8 +104,30 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	}
 	defer os.Remove(binPath)
 
-	totalChunks := len(chunks)
-	progress := make([]float64, totalChunks)
+	chunkWeights := make([]float64, len(chunks))
+	for i, expr := range chunks {
+		w := float64(countPortsInExpr(expr))
+		if w <= 0 {
+			w = 1
+		}
+		chunkWeights[i] = w
+	}
+
+	tasks := make([]scanTask, 0, len(chunks)*len(targetGroups))
+	for _, group := range targetGroups {
+		for ci, chunkExpr := range chunks {
+			weight := chunkWeights[ci] * float64(group.count)
+			if weight <= 0 {
+				weight = 1
+			}
+			tasks = append(tasks, scanTask{portExpr: chunkExpr, weight: weight, group: group})
+		}
+	}
+	if len(tasks) == 0 {
+		return nil, errors.New("未生成扫描任务")
+	}
+
+	progress := make([]float64, len(tasks))
 	var progressMu sync.Mutex
 	var logMu sync.Mutex
 	lastLog := time.Now().Add(-2 * time.Second)
@@ -135,27 +137,52 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		err  error
 	}
 
-	concurrency := 3
-	if totalChunks < concurrency {
-		concurrency = totalChunks
+	concurrency := runtime.NumCPU()
+	if concurrency > len(tasks) {
+		concurrency = len(tasks)
 	}
 	if concurrency < 1 {
 		concurrency = 1
 	}
 
+	totalRate := opts.Rate
+	if totalRate <= 0 {
+		totalRate = DefaultRate
+	}
+	baseRate := totalRate / concurrency
+	remainder := totalRate % concurrency
+	ratePool := make(chan int, concurrency)
+	for i := 0; i < concurrency; i++ {
+		rate := baseRate
+		if remainder > 0 {
+			rate++
+			remainder--
+		}
+		if rate < 1 {
+			rate = 1
+		}
+		ratePool <- rate
+	}
+
 	sem := make(chan struct{}, concurrency)
-	resChan := make(chan chunkResult, totalChunks)
+	resChan := make(chan chunkResult, len(tasks))
 	var wg sync.WaitGroup
 
 	sumProgress := func() float64 {
-		total := 0.0
-		for _, v := range progress {
-			total += v
+		weighted := 0.0
+		totalWeight := 0.0
+		for i, v := range progress {
+			w := tasks[i].weight
+			weighted += w * v
+			totalWeight += w
 		}
-		return total / float64(totalChunks)
+		if totalWeight <= 0 {
+			return 0
+		}
+		return weighted / totalWeight
 	}
 
-	processChunk := func(chunkIdx int, chunkExpr string) ([]portscan.OpenPortResult, error) {
+	processTask := func(taskIdx int, task scanTask, rate int) ([]portscan.OpenPortResult, error) {
 		outFile, ofErr := os.CreateTemp("", "veo-masscan-out-*.json")
 		if ofErr != nil {
 			return nil, fmt.Errorf("创建临时输出文件失败: %v", ofErr)
@@ -164,8 +191,14 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		outFile.Close()
 		defer os.Remove(outPath)
 
-		argsList := []string{"-p", chunkExpr, "--rate", strconv.Itoa(opts.Rate)}
-		argsList = append(argsList, targetArgs...)
+		argsList := []string{"-p", task.portExpr, "--rate", strconv.Itoa(rate)}
+		if task.group.filePath != "" {
+			argsList = append(argsList, "-iL", task.group.filePath)
+		} else if task.group.targetArg != "" {
+			argsList = append(argsList, task.group.targetArg)
+		} else {
+			return nil, fmt.Errorf("未找到有效目标参数")
+		}
 		argsList = append(argsList, "-oJ", outPath, "--wait=0")
 
 		logger.Debugf("执行: %s %s", binPath, strings.Join(argsList, " "))
@@ -182,7 +215,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		}
 
 		doneCh := make(chan struct{})
-		go func() {
+		go func(taskIdx int) {
 			defer close(doneCh)
 			scanner := bufio.NewScanner(stderr)
 			buf := make([]byte, 0, 64*1024)
@@ -191,7 +224,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 				line := scanner.Text()
 				if pct, ok := parseMasscanProgress(line); ok {
 					progressMu.Lock()
-					progress[chunkIdx] = pct
+					progress[taskIdx] = pct
 					totalPercent := sumProgress()
 					progressMu.Unlock()
 
@@ -205,7 +238,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 					logger.Debugf("masscan: %s", strings.TrimSpace(line))
 				}
 			}
-		}()
+		}(taskIdx)
 
 		go func() {
 			s := bufio.NewScanner(stdout)
@@ -221,7 +254,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		<-doneCh
 
 		progressMu.Lock()
-		progress[chunkIdx] = 100.0
+		progress[taskIdx] = 100.0
 		totalPercent := sumProgress()
 		progressMu.Unlock()
 
@@ -254,15 +287,19 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		return chunkResults, nil
 	}
 
-	for idx, chunkExpr := range chunks {
+	for idx := range tasks {
 		wg.Add(1)
-		go func(i int, expr string) {
+		go func(taskIdx int) {
 			defer wg.Done()
 			sem <- struct{}{}
-			defer func() { <-sem }()
-			data, err := processChunk(i, expr)
+			rate := <-ratePool
+			defer func() {
+				ratePool <- rate
+				<-sem
+			}()
+			data, err := processTask(taskIdx, tasks[taskIdx], rate)
 			resChan <- chunkResult{data: data, err: err}
-		}(idx, chunkExpr)
+		}(idx)
 	}
 
 	wg.Wait()
@@ -323,6 +360,374 @@ func parseSinglePortRange(expr string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return a, b, true
+}
+
+func countPortsInExpr(expr string) int {
+	parts := strings.Split(expr, ",")
+	total := 0
+	for _, part := range parts {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		if strings.Contains(p, "-") {
+			seg := strings.SplitN(p, "-", 2)
+			if len(seg) != 2 {
+				continue
+			}
+			a, err1 := strconv.Atoi(strings.TrimSpace(seg[0]))
+			b, err2 := strconv.Atoi(strings.TrimSpace(seg[1]))
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			if b < a {
+				a, b = b, a
+			}
+			total += b - a + 1
+		} else {
+			if _, err := strconv.Atoi(p); err == nil {
+				total++
+			}
+		}
+	}
+	if total <= 0 {
+		return 0
+	}
+	return total
+}
+
+type scanTask struct {
+	portExpr string
+	weight   float64
+	group    *targetGroup
+}
+
+type targetGroup struct {
+	count     int
+	targetArg string
+	filePath  string
+}
+
+func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
+	const batchSize = 64
+	cleanup := func() {}
+
+	if strings.TrimSpace(opts.TargetFile) != "" {
+		filePath := strings.TrimSpace(opts.TargetFile)
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, cleanup, fmt.Errorf("读取目标文件失败: %v", err)
+		}
+		lines := filterLines(strings.Split(string(content), "\n"))
+		if len(lines) == 0 {
+			return nil, cleanup, fmt.Errorf("目标文件为空")
+		}
+		if len(lines) <= batchSize {
+			return []*targetGroup{{count: len(lines), filePath: filePath}}, cleanup, nil
+		}
+		var tempFiles []string
+		groups := make([]*targetGroup, 0)
+		for i := 0; i < len(lines); i += batchSize {
+			end := i + batchSize
+			if end > len(lines) {
+				end = len(lines)
+			}
+			fp, err := writeTargetsToTemp(lines[i:end])
+			if err != nil {
+				for _, f := range tempFiles {
+					_ = os.Remove(f)
+				}
+				return nil, cleanup, err
+			}
+			tempFiles = append(tempFiles, fp)
+			groups = append(groups, &targetGroup{count: end - i, filePath: fp})
+		}
+		cleanup = func() {
+			for _, f := range tempFiles {
+				_ = os.Remove(f)
+			}
+		}
+		return groups, cleanup, nil
+	}
+
+	trimmed := filterLines(opts.Targets)
+	if len(trimmed) == 0 {
+		return nil, cleanup, fmt.Errorf("未指定有效目标")
+	}
+
+	var (
+		tempFiles []string
+		groups    []*targetGroup
+	)
+
+	emitBatch := func(batch []string) error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if len(batch) == 1 {
+			groups = append(groups, &targetGroup{count: 1, targetArg: batch[0]})
+			return nil
+		}
+		fp, err := writeTargetsToTemp(batch)
+		if err != nil {
+			return err
+		}
+		tempFiles = append(tempFiles, fp)
+		groups = append(groups, &targetGroup{count: len(batch), filePath: fp})
+		return nil
+	}
+
+	for _, raw := range trimmed {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+
+		count, handled, err := expandTargetExpression(raw, emitBatch)
+		if err != nil {
+			for _, f := range tempFiles {
+				_ = os.Remove(f)
+			}
+			return nil, cleanup, err
+		}
+		if handled {
+			continue
+		}
+
+		// 默认按单目标处理
+		if err := emitBatch([]string{raw}); err != nil {
+			for _, f := range tempFiles {
+				_ = os.Remove(f)
+			}
+			return nil, cleanup, err
+		}
+
+		// count 未使用，仅保持接口一致
+		_ = count
+	}
+
+	if len(groups) == 0 {
+		return nil, cleanup, fmt.Errorf("未生成有效目标分组")
+	}
+
+	cleanup = func() {
+		for _, f := range tempFiles {
+			_ = os.Remove(f)
+		}
+	}
+	return groups, cleanup, nil
+}
+
+func expandTargetExpression(raw string, emit func([]string) error) (int, bool, error) {
+	if strings.Contains(raw, "/") {
+		if _, _, err := net.ParseCIDR(raw); err == nil {
+			count, err := expandCIDRTarget(raw, emit)
+			return count, true, err
+		}
+	}
+	if strings.Contains(raw, "-") {
+		count, handled, err := expandIPRangeExpression(raw, emit)
+		return count, handled, err
+	}
+	return 0, false, nil
+}
+
+func expandCIDRTarget(expr string, emit func([]string) error) (int, error) {
+	ip, ipNet, err := net.ParseCIDR(expr)
+	if err != nil {
+		return 0, err
+	}
+	start := ip.To4()
+	if start == nil {
+		return 0, fmt.Errorf("暂不支持IPv6 CIDR: %s", expr)
+	}
+	network := start.Mask(ipNet.Mask)
+	current := make(net.IP, len(network))
+	copy(current, network)
+
+	var (
+		batch []string
+		total int
+	)
+
+	for ipNet.Contains(current) {
+		batch = append(batch, current.String())
+		total++
+		if len(batch) >= targetBatchSize {
+			if err := emit(append([]string(nil), batch...)); err != nil {
+				return total, err
+			}
+			batch = batch[:0]
+		}
+		if !incIPv4(current) {
+			break
+		}
+	}
+
+	if len(batch) > 0 {
+		if err := emit(append([]string(nil), batch...)); err != nil {
+			return total, err
+		}
+	}
+
+	return total, nil
+}
+
+func expandIPRangeExpression(raw string, emit func([]string) error) (int, bool, error) {
+	parts := strings.SplitN(raw, "-", 2)
+	if len(parts) != 2 {
+		return 0, false, nil
+	}
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+	if left == "" || right == "" {
+		return 0, false, nil
+	}
+
+	if net.ParseIP(left) != nil && net.ParseIP(right) != nil {
+		count, err := expandFullIPRange(left, right, emit)
+		return count, true, err
+	}
+
+	if idx := strings.LastIndex(left, "."); idx != -1 {
+		prefix := left[:idx+1]
+		startOct := strings.TrimSpace(left[idx+1:])
+		endOct := strings.TrimSpace(right)
+		sv, errStart := strconv.Atoi(startOct)
+		ev, errEnd := strconv.Atoi(endOct)
+		if errStart == nil && errEnd == nil && sv >= 0 && sv <= 255 && ev >= 0 && ev <= 255 {
+			if net.ParseIP(prefix+"0") != nil {
+				count, err := expandLastOctetRange(prefix, sv, ev, emit)
+				return count, true, err
+			}
+		}
+	}
+
+	return 0, false, nil
+}
+
+func expandFullIPRange(startStr, endStr string, emit func([]string) error) (int, error) {
+	startIP := net.ParseIP(startStr).To4()
+	endIP := net.ParseIP(endStr).To4()
+	if startIP == nil || endIP == nil {
+		return 0, fmt.Errorf("暂不支持IPv6地址范围: %s-%s", startStr, endStr)
+	}
+	start := ipv4ToUint32(startIP)
+	end := ipv4ToUint32(endIP)
+	if start > end {
+		start, end = end, start
+	}
+	return emitIPUintRange(start, end, emit)
+}
+
+func expandLastOctetRange(prefix string, start, end int, emit func([]string) error) (int, error) {
+	if start > end {
+		start, end = end, start
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > 255 {
+		end = 255
+	}
+	var (
+		batch []string
+		total int
+	)
+	for oct := start; oct <= end; oct++ {
+		batch = append(batch, fmt.Sprintf("%s%d", prefix, oct))
+		total++
+		if len(batch) >= targetBatchSize {
+			if err := emit(append([]string(nil), batch...)); err != nil {
+				return total, err
+			}
+			batch = batch[:0]
+		}
+	}
+	if len(batch) > 0 {
+		if err := emit(append([]string(nil), batch...)); err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+func emitIPUintRange(start, end uint32, emit func([]string) error) (int, error) {
+	var (
+		batch []string
+		total int
+	)
+	for cur := start; ; cur++ {
+		batch = append(batch, uint32ToIPv4String(cur))
+		total++
+		if len(batch) >= targetBatchSize {
+			if err := emit(append([]string(nil), batch...)); err != nil {
+				return total, err
+			}
+			batch = batch[:0]
+		}
+		if cur == end {
+			break
+		}
+	}
+	if len(batch) > 0 {
+		if err := emit(append([]string(nil), batch...)); err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+func incIPv4(ip net.IP) bool {
+	for i := len(ip) - 1; i >= 0; i-- {
+		ip[i]++
+		if ip[i] != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func ipv4ToUint32(ip net.IP) uint32 {
+	ip = ip.To4()
+	if ip == nil {
+		return 0
+	}
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+func uint32ToIPv4String(v uint32) string {
+	return fmt.Sprintf("%d.%d.%d.%d", byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
+func filterLines(lines []string) []string {
+	res := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			res = append(res, line)
+		}
+	}
+	return res
+}
+
+func writeTargetsToTemp(targets []string) (string, error) {
+	f, err := os.CreateTemp("", "veo-masscan-targets-*.txt")
+	if err != nil {
+		return "", fmt.Errorf("创建临时目标文件失败: %v", err)
+	}
+	writer := bufio.NewWriter(f)
+	for _, t := range targets {
+		_, _ = writer.WriteString(t + "\n")
+	}
+	_ = writer.Flush()
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("关闭临时文件失败: %v", err)
+	}
+	logger.Debugf("端口扫描：使用临时目标文件 %s", path)
+	return path, nil
 }
 
 // splitRangeIntoN 将闭区间 [a,b] 平均切为 n 段，返回范围表达式切片
