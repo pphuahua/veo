@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"veo/internal/core/logger"
 	"veo/internal/modules/portscan"
@@ -123,61 +124,89 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	}
 	defer os.Remove(binPath)
 
-	var results []portscan.OpenPortResult
-	for _, c := range chunks {
-		// 每片使用独立输出文件
+	totalChunks := len(chunks)
+	progress := make([]float64, totalChunks)
+	var progressMu sync.Mutex
+	var logMu sync.Mutex
+	lastLog := time.Now().Add(-2 * time.Second)
+
+	type chunkResult struct {
+		data []portscan.OpenPortResult
+		err  error
+	}
+
+	concurrency := 3
+	if totalChunks < concurrency {
+		concurrency = totalChunks
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	sem := make(chan struct{}, concurrency)
+	resChan := make(chan chunkResult, totalChunks)
+	var wg sync.WaitGroup
+
+	sumProgress := func() float64 {
+		total := 0.0
+		for _, v := range progress {
+			total += v
+		}
+		return total / float64(totalChunks)
+	}
+
+	processChunk := func(chunkIdx int, chunkExpr string) ([]portscan.OpenPortResult, error) {
 		outFile, ofErr := os.CreateTemp("", "veo-masscan-out-*.json")
 		if ofErr != nil {
 			return nil, fmt.Errorf("创建临时输出文件失败: %v", ofErr)
 		}
 		outPath := outFile.Name()
 		outFile.Close()
+		defer os.Remove(outPath)
 
-		argsList := []string{"-p", c, "--rate", strconv.Itoa(opts.Rate)}
+		argsList := []string{"-p", chunkExpr, "--rate", strconv.Itoa(opts.Rate)}
 		argsList = append(argsList, targetArgs...)
 		argsList = append(argsList, "-oJ", outPath, "--wait=0")
 
 		logger.Debugf("执行: %s %s", binPath, strings.Join(argsList, " "))
 		cmd := exec.Command(binPath, argsList...)
 
-		// 实时读取stderr以解析进度
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
 			return nil, fmt.Errorf("创建stderr管道失败: %v", err)
 		}
-		stdout, _ := cmd.StdoutPipe() // 可能无输出，但占位读取以避免阻塞
+		stdout, _ := cmd.StdoutPipe()
 
 		if err := cmd.Start(); err != nil {
 			return nil, fmt.Errorf("启动masscan失败: %v", err)
 		}
 
-		// 解析进度：按行读取stderr
 		doneCh := make(chan struct{})
-		go func(chunkExpr string, chunkIdx int, totalChunks int) {
+		go func() {
 			defer close(doneCh)
 			scanner := bufio.NewScanner(stderr)
-			// 放宽缓冲区，避免长行截断
 			buf := make([]byte, 0, 64*1024)
 			scanner.Buffer(buf, 1024*1024)
-			lastPrint := time.Now().Add(-2 * time.Second)
 			for scanner.Scan() {
 				line := scanner.Text()
 				if pct, ok := parseMasscanProgress(line); ok {
-					chunkPercent := pct / 100.0
-					totalPercent := (float64(chunkIdx) + chunkPercent) / float64(totalChunks) * 100.0
-					// 限制打印频率，减少刷屏
-                    if time.Since(lastPrint) >= 900*time.Millisecond {
-                        logger.Infof("PortScan Progress: total %.1f%%", totalPercent)
-                        lastPrint = time.Now()
-                    }
+					progressMu.Lock()
+					progress[chunkIdx] = pct
+					totalPercent := sumProgress()
+					progressMu.Unlock()
+
+					logMu.Lock()
+					if time.Since(lastLog) >= 900*time.Millisecond {
+						logger.Infof("PortScan Progress: total %.1f%%", totalPercent)
+						lastLog = time.Now()
+					}
+					logMu.Unlock()
 				} else {
-					// 其他stderr输出
 					logger.Debugf("masscan: %s", strings.TrimSpace(line))
 				}
 			}
-		}(c, indexOf(chunks, c), len(chunks))
+		}()
 
-		// 排空stdout，防止阻塞（尽管通常为空）
 		go func() {
 			s := bufio.NewScanner(stdout)
 			for s.Scan() {
@@ -186,17 +215,28 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		}()
 
 		if errRun := cmd.Wait(); errRun != nil {
-			// 将masscan输出附加到错误中，便于用户定位权限/参数问题
+			<-doneCh
 			return nil, fmt.Errorf("执行失败: %v", errRun)
 		}
 		<-doneCh
 
-		// 解析 JSON 行
+		progressMu.Lock()
+		progress[chunkIdx] = 100.0
+		totalPercent := sumProgress()
+		progressMu.Unlock()
+
+		logMu.Lock()
+		logger.Infof("PortScan Progress: total %.1f%%", totalPercent)
+		lastLog = time.Now()
+		logMu.Unlock()
+
 		file, rfErr := os.Open(outPath)
 		if rfErr != nil {
-			_ = os.Remove(outPath)
 			return nil, fmt.Errorf("读取输出失败: %v", rfErr)
 		}
+		defer file.Close()
+
+		var chunkResults []portscan.OpenPortResult
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -206,25 +246,44 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 			var rec masscanJSONRecord
 			if json.Unmarshal([]byte(line), &rec) == nil {
 				for _, p := range rec.Ports {
-					results = append(results, portscan.OpenPortResult{IP: rec.IP, Port: p.Port})
+					chunkResults = append(chunkResults, portscan.OpenPortResult{IP: rec.IP, Port: p.Port})
 				}
 			}
 		}
-		_ = file.Close()
-		_ = os.Remove(outPath)
+
+		return chunkResults, nil
+	}
+
+	for idx, chunkExpr := range chunks {
+		wg.Add(1)
+		go func(i int, expr string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			data, err := processChunk(i, expr)
+			resChan <- chunkResult{data: data, err: err}
+		}(idx, chunkExpr)
+	}
+
+	wg.Wait()
+	close(resChan)
+
+	var results []portscan.OpenPortResult
+	var firstErr error
+	for res := range resChan {
+		if res.err != nil && firstErr == nil {
+			firstErr = res.err
+		}
+		if res.err == nil {
+			results = append(results, res.data...)
+		}
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
 	}
 
 	return results, nil
-}
-
-// indexOf 返回元素在切片中的索引（首次出现），找不到返回0
-func indexOf(list []string, val string) int {
-	for i, v := range list {
-		if v == val {
-			return i
-		}
-	}
-	return 0
 }
 
 // parseMasscanProgress 解析masscan输出中的百分比进度
