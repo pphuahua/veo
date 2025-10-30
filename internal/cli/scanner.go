@@ -27,8 +27,8 @@ import (
 
 	"veo/internal/core/logger"
 
-	sharedutils "veo/internal/utils/shared"
 	"path/filepath"
+	sharedutils "veo/internal/utils/shared"
 )
 
 // FingerprintProgressTracker 指纹识别进度跟踪器
@@ -183,6 +183,10 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	}
 
 	snippetEnabled := args.VeryVerbose
+
+	if fpEngine != nil {
+		fpEngine.EnableSnippet(snippetEnabled)
+	}
 
 	return &ScanController{
 		mode:                   mode,
@@ -404,7 +408,7 @@ func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []
 	if strings.TrimSpace(sc.args.Ports) == "" {
 		return nil, nil
 	}
-    effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
+	effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
 	portsExpr := strings.TrimSpace(sc.args.Ports)
 	var targets []string
 	if strings.TrimSpace(sc.args.TargetFile) == "" {
@@ -471,11 +475,24 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 	}
 
 	// 连通性检测和URL标准化
-	checker := batch.NewConnectivityChecker(sc.config)
-	validTargets := checker.BatchCheck(uniqueTargets)
-
-	if len(validTargets) == 0 {
-		return nil, fmt.Errorf("没有可连通的目标")
+	var validTargets []string
+	if sc.args != nil && sc.args.NoAliveCheck {
+		parser := batch.NewTargetParser()
+		for _, target := range uniqueTargets {
+			urls := parser.NormalizeURL(target)
+			if len(urls) > 0 {
+				validTargets = append(validTargets, urls[0])
+			} else {
+				validTargets = append(validTargets, target)
+			}
+		}
+		logger.Debugf("跳过存活检测，直接使用标准化目标: %d 个", len(validTargets))
+	} else {
+		checker := batch.NewConnectivityChecker(sc.config)
+		validTargets = checker.BatchCheck(uniqueTargets)
+		if len(validTargets) == 0 {
+			return nil, fmt.Errorf("没有可连通的目标")
+		}
 	}
 
 	logger.Debugf("目标解析完成: 最终有效目标 %d 个", len(validTargets))
@@ -1006,7 +1023,7 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 		var pr []report.SDKPortResult
 		if strings.TrimSpace(sc.args.Ports) != "" {
 			// 计算有效速率与端口表达式（用于指示器输出）
-            effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
+			effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
 			portsExpr := strings.TrimSpace(sc.args.Ports)
 
 			// 执行端口扫描（一次），复用结果：控制台打印 + 合并JSON

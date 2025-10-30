@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,10 +32,7 @@ type masscanJSONRecord struct {
 // DefaultRate 端口扫描默认速率（包/秒）
 const DefaultRate = 5012
 
-const (
-	targetBatchSize  = 64
-	maxCIDRExpansion = 4096
-)
+const targetBatchSize = 64
 
 // ComputeEffectiveRate 计算最终生效的扫描速率（<=0 时采用默认值）
 func ComputeEffectiveRate(rate int) int {
@@ -199,7 +197,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		} else {
 			return nil, fmt.Errorf("未找到有效目标参数")
 		}
-		argsList = append(argsList, "-oJ", outPath, "--wait=0")
+		argsList = append(argsList, "-oJ", outPath, "--wait=3")
 
 		logger.Debugf("执行: %s %s", binPath, strings.Join(argsList, " "))
 		cmd := exec.Command(binPath, argsList...)
@@ -230,7 +228,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 
 					logMu.Lock()
 					if time.Since(lastLog) >= 900*time.Millisecond {
-						logger.Infof("PortScan Progress: total %.1f%%", totalPercent)
+						fmt.Printf("\rPortScan Working %.1f%%\r", totalPercent)
 						lastLog = time.Now()
 					}
 					logMu.Unlock()
@@ -259,7 +257,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		progressMu.Unlock()
 
 		logMu.Lock()
-		logger.Infof("PortScan Progress: total %.1f%%", totalPercent)
+		fmt.Printf("\rPortScan Working %.1f%%\r", totalPercent)
 		lastLog = time.Now()
 		logMu.Unlock()
 
@@ -483,7 +481,7 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 			continue
 		}
 
-		count, handled, err := expandTargetExpression(raw, emitBatch)
+		handled, err := expandTargetExpression(raw, emitBatch)
 		if err != nil {
 			for _, f := range tempFiles {
 				_ = os.Remove(f)
@@ -501,9 +499,6 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 			}
 			return nil, cleanup, err
 		}
-
-		// count 未使用，仅保持接口一致
-		_ = count
 	}
 
 	if len(groups) == 0 {
@@ -518,28 +513,26 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 	return groups, cleanup, nil
 }
 
-func expandTargetExpression(raw string, emit func([]string) error) (int, bool, error) {
+func expandTargetExpression(raw string, emit func([]string) error) (bool, error) {
 	if strings.Contains(raw, "/") {
 		if _, _, err := net.ParseCIDR(raw); err == nil {
-			count, err := expandCIDRTarget(raw, emit)
-			return count, true, err
+			return true, expandCIDRTarget(raw, emit)
 		}
 	}
 	if strings.Contains(raw, "-") {
-		count, handled, err := expandIPRangeExpression(raw, emit)
-		return count, handled, err
+		return expandIPRangeExpression(raw, emit)
 	}
-	return 0, false, nil
+	return false, nil
 }
 
-func expandCIDRTarget(expr string, emit func([]string) error) (int, error) {
+func expandCIDRTarget(expr string, emit func([]string) error) error {
 	ip, ipNet, err := net.ParseCIDR(expr)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	start := ip.To4()
 	if start == nil {
-		return 0, fmt.Errorf("暂不支持IPv6 CIDR: %s", expr)
+		return fmt.Errorf("暂不支持IPv6 CIDR: %s", expr)
 	}
 	network := start.Mask(ipNet.Mask)
 	current := make(net.IP, len(network))
@@ -555,7 +548,7 @@ func expandCIDRTarget(expr string, emit func([]string) error) (int, error) {
 		total++
 		if len(batch) >= targetBatchSize {
 			if err := emit(append([]string(nil), batch...)); err != nil {
-				return total, err
+				return err
 			}
 			batch = batch[:0]
 		}
@@ -566,27 +559,26 @@ func expandCIDRTarget(expr string, emit func([]string) error) (int, error) {
 
 	if len(batch) > 0 {
 		if err := emit(append([]string(nil), batch...)); err != nil {
-			return total, err
+			return err
 		}
 	}
 
-	return total, nil
+	return nil
 }
 
-func expandIPRangeExpression(raw string, emit func([]string) error) (int, bool, error) {
+func expandIPRangeExpression(raw string, emit func([]string) error) (bool, error) {
 	parts := strings.SplitN(raw, "-", 2)
 	if len(parts) != 2 {
-		return 0, false, nil
+		return false, nil
 	}
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
 	if left == "" || right == "" {
-		return 0, false, nil
+		return false, nil
 	}
 
 	if net.ParseIP(left) != nil && net.ParseIP(right) != nil {
-		count, err := expandFullIPRange(left, right, emit)
-		return count, true, err
+		return true, expandFullIPRange(left, right, emit)
 	}
 
 	if idx := strings.LastIndex(left, "."); idx != -1 {
@@ -597,20 +589,19 @@ func expandIPRangeExpression(raw string, emit func([]string) error) (int, bool, 
 		ev, errEnd := strconv.Atoi(endOct)
 		if errStart == nil && errEnd == nil && sv >= 0 && sv <= 255 && ev >= 0 && ev <= 255 {
 			if net.ParseIP(prefix+"0") != nil {
-				count, err := expandLastOctetRange(prefix, sv, ev, emit)
-				return count, true, err
+				return true, expandLastOctetRange(prefix, sv, ev, emit)
 			}
 		}
 	}
 
-	return 0, false, nil
+	return false, nil
 }
 
-func expandFullIPRange(startStr, endStr string, emit func([]string) error) (int, error) {
+func expandFullIPRange(startStr, endStr string, emit func([]string) error) error {
 	startIP := net.ParseIP(startStr).To4()
 	endIP := net.ParseIP(endStr).To4()
 	if startIP == nil || endIP == nil {
-		return 0, fmt.Errorf("暂不支持IPv6地址范围: %s-%s", startStr, endStr)
+		return fmt.Errorf("暂不支持IPv6地址范围: %s-%s", startStr, endStr)
 	}
 	start := ipv4ToUint32(startIP)
 	end := ipv4ToUint32(endIP)
@@ -620,7 +611,7 @@ func expandFullIPRange(startStr, endStr string, emit func([]string) error) (int,
 	return emitIPUintRange(start, end, emit)
 }
 
-func expandLastOctetRange(prefix string, start, end int, emit func([]string) error) (int, error) {
+func expandLastOctetRange(prefix string, start, end int, emit func([]string) error) error {
 	if start > end {
 		start, end = end, start
 	}
@@ -639,20 +630,20 @@ func expandLastOctetRange(prefix string, start, end int, emit func([]string) err
 		total++
 		if len(batch) >= targetBatchSize {
 			if err := emit(append([]string(nil), batch...)); err != nil {
-				return total, err
+				return err
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
 		if err := emit(append([]string(nil), batch...)); err != nil {
-			return total, err
+			return err
 		}
 	}
-	return total, nil
+	return nil
 }
 
-func emitIPUintRange(start, end uint32, emit func([]string) error) (int, error) {
+func emitIPUintRange(start, end uint32, emit func([]string) error) error {
 	var (
 		batch []string
 		total int
@@ -662,7 +653,7 @@ func emitIPUintRange(start, end uint32, emit func([]string) error) (int, error) 
 		total++
 		if len(batch) >= targetBatchSize {
 			if err := emit(append([]string(nil), batch...)); err != nil {
-				return total, err
+				return err
 			}
 			batch = batch[:0]
 		}
@@ -672,10 +663,10 @@ func emitIPUintRange(start, end uint32, emit func([]string) error) (int, error) 
 	}
 	if len(batch) > 0 {
 		if err := emit(append([]string(nil), batch...)); err != nil {
-			return total, err
+			return err
 		}
 	}
-	return total, nil
+	return nil
 }
 
 func incIPv4(ip net.IP) bool {
@@ -920,13 +911,7 @@ func DerivePortsFromTargets(targets []string) string {
 	for p := range seen {
 		ports = append(ports, p)
 	}
-	for i := 0; i < len(ports); i++ {
-		for j := i + 1; j < len(ports); j++ {
-			if ports[j] < ports[i] {
-				ports[i], ports[j] = ports[j], ports[i]
-			}
-		}
-	}
+	sort.Ints(ports)
 	var sb strings.Builder
 	for i, p := range ports {
 		if i > 0 {
@@ -1007,13 +992,7 @@ func buildPortChunks(expr string, chunkSize int) ([]string, error) {
 	for v := range portSet {
 		ports = append(ports, v)
 	}
-	for i := 0; i < len(ports); i++ {
-		for j := i + 1; j < len(ports); j++ {
-			if ports[j] < ports[i] {
-				ports[i], ports[j] = ports[j], ports[i]
-			}
-		}
-	}
+	sort.Ints(ports)
 	// 分块并压缩为范围字符串
 	var chunks []string
 	for i := 0; i < len(ports); i += chunkSize {

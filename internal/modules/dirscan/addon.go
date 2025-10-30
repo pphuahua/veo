@@ -18,28 +18,12 @@ import (
 
 // DirscanAddon 目录扫描插件
 type DirscanAddon struct {
-    proxy.BaseAddon
-    engine         *Engine
-    collector      *collector.Collector
-    consoleManager *console.ConsoleManager
-    enabled        bool
-    status         ScanStatus
-}
-
-type staticCollector struct {
-	urls map[string]int
-}
-
-func (sc *staticCollector) GetURLMap() map[string]int {
-	result := make(map[string]int, len(sc.urls))
-	for k, v := range sc.urls {
-		result[k] = v
-	}
-	return result
-}
-
-func (sc *staticCollector) GetURLCount() int {
-	return len(sc.urls)
+	proxy.BaseAddon
+	engine         *Engine
+	collector      *collector.Collector
+	consoleManager *console.ConsoleManager
+	enabled        bool
+	status         ScanStatus
 }
 
 // NewDirscanAddon 创建目录扫描插件
@@ -138,8 +122,7 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	}
 
 	// 检查是否有收集到的URL
-	urlMap := da.collector.GetURLMap()
-	if len(urlMap) == 0 {
+	if da.collector.GetURLCount() == 0 {
 		return nil, fmt.Errorf("没有收集到URL，无法开始扫描")
 	}
 
@@ -151,8 +134,7 @@ func (da *DirscanAddon) TriggerScan() (*ScanResult, error) {
 	defer da.collector.EnableCollection()
 
 	// 执行扫描
-	collectorWrapper := &staticCollector{urls: urlMap}
-	result, err := da.engine.PerformScan(collectorWrapper)
+	result, err := da.engine.PerformScan(da.collector)
 	if err != nil {
 		da.status = StatusError
 		return nil, err
@@ -183,13 +165,14 @@ func (da *DirscanAddon) GetConsoleManager() *console.ConsoleManager {
 
 // GetCollector 获取collector（用于依赖注入）
 func (da *DirscanAddon) GetCollector() *collector.Collector {
-    return da.collector
+	return da.collector
 }
 
 // SetCollector 注入外部的URL采集器实例，确保与代理侧使用同一实例
 //
 // 参数:
 //   - c: *collector.Collector 外部创建并用于代理拦截的URL采集器
+//
 // 返回:
 //   - 无
 //
@@ -198,11 +181,11 @@ func (da *DirscanAddon) GetCollector() *collector.Collector {
 //     若目录扫描插件内部持有不同的Collector实例，将导致“按回车触发扫描”时取不到已采集的URL。
 //     通过本方法将外部Collector注入到插件中，可确保两端使用同一个实例，避免“没有收集到URL”的问题。
 func (da *DirscanAddon) SetCollector(c *collector.Collector) {
-    if c == nil {
-        return
-    }
-    da.collector = c
-    logger.Debug("目录扫描插件Collector已注入为外部实例")
+	if c == nil {
+		return
+	}
+	da.collector = c
+	logger.Debug("目录扫描插件Collector已注入为外部实例")
 }
 
 // ===========================================
