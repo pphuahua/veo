@@ -9,9 +9,11 @@ import (
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 	"veo/internal/core/logger"
 	"veo/internal/modules/portscan"
 )
@@ -30,15 +32,16 @@ const DefaultRate = 5012
 
 // ComputeEffectiveRate 计算最终生效的扫描速率（<=0 时采用默认值）
 func ComputeEffectiveRate(rate int) int {
-    if rate <= 0 {
-        return DefaultRate
-    }
-    return rate
+	if rate <= 0 {
+		return DefaultRate
+	}
+	return rate
 }
 
 // Run 执行 masscan 扫描（使用内嵌二进制落地的方式）
 // 参数：
 //   - opts: 端口扫描选项（端口表达式、速率、目标）
+//
 // 返回：
 //   - []portscan.OpenPortResult: 扫描结果
 //   - error: 错误信息
@@ -52,10 +55,10 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	if strings.TrimSpace(opts.Ports) == "" {
 		return nil, fmt.Errorf("未指定端口表达式")
 	}
-    // 默认速率：若未指定，则使用默认值
-    if opts.Rate <= 0 {
-        opts.Rate = DefaultRate
-    }
+	// 默认速率：若未指定，则使用默认值
+	if opts.Rate <= 0 {
+		opts.Rate = DefaultRate
+	}
 	if len(opts.Targets) == 0 && strings.TrimSpace(opts.TargetFile) == "" {
 		return nil, fmt.Errorf("未指定目标 (-u 或 -f)")
 	}
@@ -136,10 +139,57 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 
 		logger.Debugf("执行: %s %s", binPath, strings.Join(argsList, " "))
 		cmd := exec.Command(binPath, argsList...)
-		if out, errRun := cmd.CombinedOutput(); errRun != nil {
-			// 将masscan输出附加到错误中，便于用户定位权限/参数问题
-			return nil, fmt.Errorf("执行失败: %v\n输出: %s", errRun, strings.TrimSpace(string(out)))
+
+		// 实时读取stderr以解析进度
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return nil, fmt.Errorf("创建stderr管道失败: %v", err)
 		}
+		stdout, _ := cmd.StdoutPipe() // 可能无输出，但占位读取以避免阻塞
+
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("启动masscan失败: %v", err)
+		}
+
+		// 解析进度：按行读取stderr
+		doneCh := make(chan struct{})
+		go func(chunkExpr string, chunkIdx int, totalChunks int) {
+			defer close(doneCh)
+			scanner := bufio.NewScanner(stderr)
+			// 放宽缓冲区，避免长行截断
+			buf := make([]byte, 0, 64*1024)
+			scanner.Buffer(buf, 1024*1024)
+			lastPrint := time.Now().Add(-2 * time.Second)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if pct, ok := parseMasscanProgress(line); ok {
+					chunkPercent := pct / 100.0
+					totalPercent := (float64(chunkIdx) + chunkPercent) / float64(totalChunks) * 100.0
+					// 限制打印频率，减少刷屏
+                    if time.Since(lastPrint) >= 900*time.Millisecond {
+                        logger.Infof("PortScan Progress: total %.1f%%", totalPercent)
+                        lastPrint = time.Now()
+                    }
+				} else {
+					// 其他stderr输出
+					logger.Debugf("masscan: %s", strings.TrimSpace(line))
+				}
+			}
+		}(c, indexOf(chunks, c), len(chunks))
+
+		// 排空stdout，防止阻塞（尽管通常为空）
+		go func() {
+			s := bufio.NewScanner(stdout)
+			for s.Scan() {
+				logger.Debugf("masscan out: %s", strings.TrimSpace(s.Text()))
+			}
+		}()
+
+		if errRun := cmd.Wait(); errRun != nil {
+			// 将masscan输出附加到错误中，便于用户定位权限/参数问题
+			return nil, fmt.Errorf("执行失败: %v", errRun)
+		}
+		<-doneCh
 
 		// 解析 JSON 行
 		file, rfErr := os.Open(outPath)
@@ -165,6 +215,28 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	}
 
 	return results, nil
+}
+
+// indexOf 返回元素在切片中的索引（首次出现），找不到返回0
+func indexOf(list []string, val string) int {
+	for i, v := range list {
+		if v == val {
+			return i
+		}
+	}
+	return 0
+}
+
+// parseMasscanProgress 解析masscan输出中的百分比进度
+// 示例：rate:  10.00-kpps,  1.13% done, 0:02:58 to go, found=0
+func parseMasscanProgress(line string) (percent float64, ok bool) {
+	rePct := regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?)%\s*done`)
+	if m := rePct.FindStringSubmatch(line); len(m) == 2 {
+		if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 // parseSinglePortRange 尝试解析单一连续端口范围表达式，如 "a-b"
@@ -231,6 +303,7 @@ func splitRangeIntoN(a, b, n int) []string {
 // ResolveTargetsToIPs 将输入的目标（URL/域名/IP）解析为IP列表
 // 参数：
 //   - targets: 原始目标列表，可以是 URL（含协议/端口/路径）、域名、IP（可带端口）
+//
 // 返回：
 //   - []string: 解析得到的去重IP列表
 //   - error: 解析失败时返回错误
@@ -341,6 +414,7 @@ func ResolveTargetsToIPs(targets []string) ([]string, error) {
 // DerivePortsFromTargets 从 URL 目标中提取端口（若存在），或按协议给出默认端口
 // 参数：
 //   - targets: 原始目标列表
+//
 // 返回：
 //   - string: 端口表达式（逗号分隔的端口列表，如 "80,443,8080"），若未能推导返回空
 func DerivePortsFromTargets(targets []string) string {
