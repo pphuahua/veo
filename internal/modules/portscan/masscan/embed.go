@@ -1,11 +1,11 @@
 package masscan
 
 import (
-	"embed"
-	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
+    "embed"
+    "fmt"
+    "os"
+    "path"
+    "runtime"
 )
 
 // 注意：此处仅建立嵌入框架。请将各平台的 masscan 二进制置于 assets 目录下：
@@ -29,40 +29,42 @@ func ExtractEmbeddedBinary() (string, error) {
 	arch := runtime.GOARCH
 
 	candidates := []string{}
-	switch osName {
-	case "darwin":
-		// 优先考虑精确架构
-		candidates = append(candidates,
-			filepath.Join("assets", "darwin", arch, "masscan"),
-			filepath.Join("assets", "darwin", "masscan"),
-		)
-	case "linux":
-		candidates = append(candidates,
-			filepath.Join("assets", "linux", arch, "masscan"),
-			filepath.Join("assets", "linux", "masscan"),
-		)
-	case "windows":
-		candidates = append(candidates,
-			filepath.Join("assets", "windows", arch, "masscan.exe"),
-			filepath.Join("assets", "windows", "masscan.exe"),
-		)
-	default:
-		// 未知平台仍尝试泛路径
-		candidates = append(candidates, filepath.Join("assets", osName, arch, "masscan"))
-	}
+    switch osName {
+    case "darwin":
+        // 优先考虑精确架构
+        candidates = append(candidates,
+            path.Join("assets", "darwin", arch, "masscan"),
+            path.Join("assets", "darwin", "masscan"),
+        )
+    case "linux":
+        candidates = append(candidates,
+            path.Join("assets", "linux", arch, "masscan"),
+            path.Join("assets", "linux", "masscan"),
+        )
+    case "windows":
+        candidates = append(candidates,
+            path.Join("assets", "windows", arch, "masscan.exe"),
+            path.Join("assets", "windows", "masscan.exe"),
+        )
+    default:
+        // 未知平台仍尝试泛路径
+        candidates = append(candidates, path.Join("assets", osName, arch, "masscan"))
+    }
 
-	var data []byte
-	for _, p := range candidates {
-		b, err := embeddedFS.ReadFile(p)
-		if err == nil && len(b) > 0 {
-			data = b
-			break
-		}
-	}
+    var data []byte
+    var tried []string
+    for _, p := range candidates {
+        b, err := embeddedFS.ReadFile(p)
+        if err == nil && len(b) > 0 {
+            data = b
+            break
+        }
+        tried = append(tried, p)
+    }
 
-	if len(data) == 0 {
-		return "", fmt.Errorf("未找到masscan二进制文件，请为平台 %s/%s 放置对应文件到 assets 目录", osName, arch)
-	}
+    if len(data) == 0 {
+        return "", fmt.Errorf("未找到masscan二进制文件，请为平台 %s/%s 放置对应文件到 assets 目录 (尝试路径: %v)", osName, arch, tried)
+    }
 
 	// 落地临时可执行文件
 	suffix := ""
