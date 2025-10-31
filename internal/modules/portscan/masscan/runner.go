@@ -29,9 +29,6 @@ type masscanJSONRecord struct {
 	} `json:"ports"`
 }
 
-// DefaultRate 端口扫描默认速率（包/秒）
-const DefaultRate = 5012
-
 const targetBatchSize = 64
 
 // ComputeEffectiveRate 计算最终生效的扫描速率（<=0 时采用默认值）
@@ -39,6 +36,9 @@ const baseRate = 2048
 
 func ComputeEffectiveRate(rate int) int {
 	if rate <= 0 {
+		return baseRate
+	}
+	if rate > baseRate {
 		return baseRate
 	}
 	return rate
@@ -61,9 +61,8 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	if strings.TrimSpace(opts.Ports) == "" {
 		return nil, fmt.Errorf("未指定端口表达式")
 	}
-	// 默认速率：若未指定，则使用默认值
 	if opts.Rate <= 0 {
-		opts.Rate = DefaultRate
+		opts.Rate = baseRate
 	}
 	if len(opts.Targets) == 0 && strings.TrimSpace(opts.TargetFile) == "" {
 		return nil, fmt.Errorf("未指定目标 (-u 或 -f)")
@@ -148,11 +147,6 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	concurrency := 2
 	if len(tasks) < concurrency {
 		concurrency = len(tasks)
-	}
-
-	ratePool := make(chan int, concurrency)
-	for i := 0; i < concurrency; i++ {
-		ratePool <- effectiveRate
 	}
 
 	sumProgress := func() float64 {
@@ -286,9 +280,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		go func() {
 			defer wg.Done()
 			for idx := range jobCh {
-				rate := <-ratePool
-				data, err := processTask(idx, tasks[idx], rate)
-				ratePool <- rate
+				data, err := processTask(idx, tasks[idx], effectiveRate)
 
 				if err != nil {
 					errMu.Lock()
