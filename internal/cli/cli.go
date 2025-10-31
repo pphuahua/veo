@@ -328,205 +328,60 @@ func getStringValue(a, b string) string {
 
 // showCustomHelp 显示自定义帮助信息
 func showCustomHelp() {
+	prog := filepath.Base(os.Args[0])
 	fmt.Printf(`
-
 veo - 双模式安全扫描工具
 
 用法:
-  %s -u <targets> -m <modules> [options]          # 主动扫描模式 (默认)
-  %s -f <file> -m <modules> [options]             # 批量文件扫描模式
-  %s -u <targets> -m <modules> --listen [options] # 被动代理模式
+  %[1]s -u <targets> [options]           # 主动扫描（默认）
+  %[1]s -f <file> [options]              # 文件批量扫描
+  %[1]s -u <targets> --listen [options]  # 被动代理模式
 
-目标指定参数 (二选一或组合使用):
-  -u string
-        目标主机/URL，多个目标用逗号分隔
-        支持格式:
-          - 完整URL: https://example.com, http://api.example.com/v1
-          - 域名: example.com, api.example.com
-          - 带端口: example.com:8080, 192.168.1.1:443
-        主动模式: -u www.example.com,api.example.com/path
-        被动模式: -u www.example.com (或 * 表示全部抓取)
+目标与模块:
+  -u string            目标列表，逗号分隔；支持 URL / 域名 / host:port / CIDR / IP 范围
+  -f string            目标文件，每行一个目标；支持空行和 # 注释
+  -m string            启用模块，默认 finger,dirscan。可选 finger / dirscan / port
+  --listen             被动代理模式；配合 -lp 指定监听端口（默认 9080）
 
-  -f string
-        目标文件路径，每行一个目标，支持批量扫描
-        文件格式要求:
-          - 每行一个目标URL或域名
-          - 支持 # 开头的注释行
-          - 支持空行（自动跳过）
-          - 文件编码: UTF-8
-        支持的目标格式:
-          - https://example.com
-          - example.com:8080
-          - 192.168.1.1:443
-          - api.example.com/path
-        示例: -f targets.txt
+端口扫描:
+  -p string            端口表达式，例如 80,443,8000-8100
+  --rate int           探测速率，默认 2048；大于 2048 时按 2048 为一批运行
+  -sV                  启用服务识别（内置指纹 + HTTP fallback）
 
-扫描模块参数:
-  -m string
-        启用的模块，多个模块用逗号分隔 (默认: finger,dirscan)
-        如果未指定此参数，将自动启用 finger 和 dirscan 模块
-        可用模块:
-          - finger: 指纹识别模块
-          - dirscan: 目录扫描模块
-          - port: 端口扫描模块（仅端口扫描）
-        示例: -m finger              # 只启用指纹识别
-              -m dirscan             # 只启用目录扫描
-              -m port               # 只启用端口扫描（需同时指定 -p）
-              -m finger,dirscan      # 启用指纹识别和目录扫描（默认）
+扫描控制:
+  --debug              输出调试日志
+  --stats              显示实时统计信息
+  -na                  跳过存活检测
+  -vv                  指纹识别输出匹配片段
+  -nc                  禁用彩色输出
+  --json               控制台输出 JSON
 
-可选参数:
-  --debug
-        启用调试模式，显示详细的调试日志 (默认: 仅显示INFO及以上级别)
-        调试模式下会显示 [DBG], [INF], [WRN], [ERR], [FTL] 所有级别的日志
-        正常模式下仅显示 [INF], [WRN], [ERR], [FTL] 级别的日志
+性能调优:
+  -t, --threads int    全局并发线程数（默认 200）
+  --retry int          失败重试次数（默认 3）
+  --timeout int        全局超时时间（秒，默认 5）
 
-  --listen
-        启用被动代理模式 (默认: 主动扫描模式)
-        被动模式下工具作为代理服务器运行，拦截HTTP流量
+目录扫描:
+  -w string            指定自定义目录字典，可用逗号添加多个
 
-  -lp int
-        本地代理监听端口，仅在被动模式下使用 (默认: 9080)
-        示例: -lp 9080
+输出与过滤:
+  -o, --output string  写入报告文件 (.json / .xlsx)
+  --header string      自定义 HTTP 头部，可重复指定
+  -s string            保留的 HTTP 状态码列表
+  --filter int         相似页面过滤阈值（字节，0 表示关闭）
 
-  -w string
-        自定义字典文件路径，覆盖配置文件中的默认字典
-        字典文件格式: 每行一个路径，支持注释行
-        示例: -w /path/to/custom.txt
+帮助:
+  -h, --help           显示本帮助信息
 
-性能控制参数:
-  -t, --threads int
-        统一线程并发数量，对所有模块(指纹识别、目录扫描、连通性检测)生效
-        范围: 1-1000，默认: 200
-        示例: -t 50, --threads 100
+示例:
+  %[1]s -u https://target.com -m finger,dirscan
+  %[1]s -u 1.1.1.1 -m port -p 1-65535 -sV --rate 10000
+  %[1]s -f targets.txt -m finger,dirscan --stats
+  %[1]s -u target.com --listen -lp 8080
 
-  --retry int
-        扫描失败目标的重试次数，对所有模块生效
-        范围: 0-10，默认: 3
-        示例: --retry 5
+完整参数请参见 docs/CLI.md
 
-  --timeout int
-        全局连接超时时间(秒)，对所有模块生效，覆盖配置文件设置
-        范围: 1-300，默认: 5
-        示例: --timeout 10
-
-  -o, --output string
-        输出报告文件路径 (默认不输出文件)
-        支持格式: HTML, JSON
-        示例: --output report.html (HTML格式)
-              --output report.json (JSON格式)
-              --output /path/to/report.html
-              --output ./reports/scan_result.json
-
-  --stats
-        启用实时扫描进度统计显示
-        显示内容: 运行时间、主机数、RPS、完成数、超时数、请求进度
-        示例: --stats
-
-  --header string
-        自定义HTTP认证头部，格式: "Header-Name: Header-Value"
-        可重复使用多次添加多个头部，支持所有HTTP请求方法
-        常用认证头部: Authorization, Cookie, X-API-Key, X-Auth-Token
-        示例: --header "Authorization: Bearer token123"
-              --header "Cookie: session=abc123; csrf=xyz789"
-              --header "X-API-Key: your-api-key"
-
-  -s string
-        指定需要保留的HTTP状态码，逗号分隔 (默认: 使用配置文件中的ValidStatusCodes)
-        只有匹配这些状态码的结果才会被输出，CLI参数优先级高于配置文件
-        状态码范围: 100-599之间的整数
-        示例: -s 200                    # 只返回200状态码
-              -s 200,301,302            # 返回200、301、302状态码
-              -s 200,403,500            # 返回200、403、500状态码
-
-  --filter int
-        相似页面过滤容错阈值(字节)，用于控制目录扫描中相似页面的过滤敏感度
-        值越大过滤越严格，值越小过滤越宽松
-        范围: 0-500 (默认: 50)
-        特殊值: 0 表示禁用相似页面过滤
-        示例: --filter=100  # 严格过滤
-              --filter=30   # 宽松过滤
-              --filter=0    # 禁用过滤
-
-  -h, --help
-        显示此帮助信息
-
-主动扫描模式示例:
-  # 单目标基本扫描
-  %s -u target.com -m dirscan                    # 目录扫描
-  %s -u target.com -m finger                     # 指纹识别
-  %s -u target.com -m finger,dirscan             # 组合扫描
-
-  # 多目标扫描
-  %s -u target1.com,target2.com/api -m finger,dirscan
-
-  # 带端口的目标扫描
-  %s -u target.com:8080,192.168.1.1:443 -m finger
-
-  # 多层级目录扫描
-  %s -u target.com/api/v1/users -m dirscan
-
-批量文件扫描示例:
-  # 基本批量扫描
-  %s -f targets.txt -m finger,dirscan            # 从文件读取目标列表
-
-  # 混合模式扫描 (命令行 + 文件)
-  %s -u target.com -f targets.txt -m finger      # 合并命令行和文件目标
-
-  # 使用自定义字典的批量扫描
-  %s -f targets.txt -m dirscan -w custom.txt     # 批量目录扫描
-
-被动代理模式示例:
-  # 基本代理模式
-  %s -u target.com -m dirscan --listen
-
-  # 全部抓取模式
-  %s -m finger,dirscan --listen -lp 8080
-
-  # 使用自定义字典
-  %s -u target.com -m dirscan -w /path/to/wordlist.txt --listen
-
-  # 多目标指纹识别
-  %s -u target1.com,target2.com -m finger,dirscan -lp 9080 --listen
-
-目标文件格式示例 (targets.txt):
-  # 这是注释行，会被自动跳过
-  https://example.com
-  http://api.example.com/v1
-  target.com:8080
-  192.168.1.1:443
-  subdomain.example.com
-
-  # 支持空行分隔
-  another-target.com
-
-常用命令组合:
-  # 快速指纹识别
-  %s -u target.com -m finger
-
-  # 深度目录扫描
-  %s -u target.com -m dirscan -w large-wordlist.txt
-
-  # 批量安全评估
-  %s -f company-domains.txt -m finger,dirscan
-
-  # 混合目标全面扫描
-  %s -u primary.com -f backup-targets.txt -m finger,dirscan
-
-故障排除:
-  - 确保目标文件存在且可读
-  - 检查目标URL格式是否正确
-  - 验证网络连接和目标可达性
-  - 查看日志输出获取详细错误信息
-
-配置文件:
-  配置文件位置: ./configs/config.yaml
-  CLI参数优先级高于配置文件设置
-  并行度和超时等参数通过配置文件控制
-`, os.Args[0], os.Args[0], os.Args[0], // 用法部分 (3个)
-		os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], // 主动扫描示例 (6个)
-		os.Args[0], os.Args[0], os.Args[0], // 批量扫描示例 (3个)
-		os.Args[0], os.Args[0], os.Args[0], os.Args[0], // 被动代理示例 (4个)
-		os.Args[0], os.Args[0], os.Args[0], os.Args[0]) // 常用命令组合 (4个)
+`, prog)
 }
 
 // parseCommaSeparatedString 解析逗号分隔的字符串

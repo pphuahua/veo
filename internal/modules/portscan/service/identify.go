@@ -178,7 +178,7 @@ func fallbackHTTP(host string, port int, timeout time.Duration) bool {
 	if port != 80 && port != 0 {
 		requestHost = fmt.Sprintf("%s:%d", host, port)
 	}
-	req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: veo-service-probe\r\nAccept: */*\r\nConnection: close\r\n\r\n", requestHost)
+	req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Moziilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0\r\nAccept: */*\r\nConnection: close\r\n\r\n", requestHost)
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return false
 	}
