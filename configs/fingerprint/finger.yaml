@@ -3373,3 +3373,14 @@ Zimbra邮件管理系统:
 H3C-iMC智能管理中心:
   dsl:
     - "contains(body, '/selfservice/preregister','mainForm:ifCheckCode','loginRegisterContent','/selfservice/index.xhtml')"
+
+ureport:
+  path: "/ureport/designer"
+  dsl:
+    - "contains(body, 'ureport','ureport-asserts')"
+    - "contains(body, 'window._server=\"/ureport\"')"
+
+群杰印章物联网管理平台:
+  path: "/ureport/designer"
+  dsl:
+    - "icon('/favicon.ico', '8d51bc407f98aa7b6919dda75b6da5f4')"
