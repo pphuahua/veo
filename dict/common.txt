@@ -662,6 +662,8 @@
 /index.jsp
 /.env
 /.git/config
+/WebServiceNew
+/aspnet_client
 /robots.txt
 /sitemap.xml
 /crossdomain.xml

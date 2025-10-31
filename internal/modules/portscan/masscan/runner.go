@@ -35,9 +35,11 @@ const DefaultRate = 5012
 const targetBatchSize = 64
 
 // ComputeEffectiveRate 计算最终生效的扫描速率（<=0 时采用默认值）
+const baseRate = 2048
+
 func ComputeEffectiveRate(rate int) int {
 	if rate <= 0 {
-		return DefaultRate
+		return baseRate
 	}
 	return rate
 }
@@ -135,36 +137,23 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		err  error
 	}
 
-	concurrency := runtime.NumCPU()
-	if concurrency > len(tasks) {
+	effectiveRate := opts.Rate
+	if effectiveRate <= 0 {
+		effectiveRate = baseRate
+	}
+	if effectiveRate > baseRate {
+		effectiveRate = baseRate
+	}
+
+	concurrency := 2
+	if len(tasks) < concurrency {
 		concurrency = len(tasks)
 	}
-	if concurrency < 1 {
-		concurrency = 1
-	}
 
-	totalRate := opts.Rate
-	if totalRate <= 0 {
-		totalRate = DefaultRate
-	}
-	baseRate := totalRate / concurrency
-	remainder := totalRate % concurrency
 	ratePool := make(chan int, concurrency)
 	for i := 0; i < concurrency; i++ {
-		rate := baseRate
-		if remainder > 0 {
-			rate++
-			remainder--
-		}
-		if rate < 1 {
-			rate = 1
-		}
-		ratePool <- rate
+		ratePool <- effectiveRate
 	}
-
-	sem := make(chan struct{}, concurrency)
-	resChan := make(chan chunkResult, len(tasks))
-	var wg sync.WaitGroup
 
 	sumProgress := func() float64 {
 		weighted := 0.0
@@ -197,7 +186,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		} else {
 			return nil, fmt.Errorf("未找到有效目标参数")
 		}
-		argsList = append(argsList, "-oJ", outPath, "--wait=3")
+		argsList = append(argsList, "-oJ", outPath, "--wait=0")
 
 		logger.Debugf("执行: %s %s", binPath, strings.Join(argsList, " "))
 		cmd := exec.Command(binPath, argsList...)
@@ -285,34 +274,45 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		return chunkResults, nil
 	}
 
-	for idx := range tasks {
-		wg.Add(1)
-		go func(taskIdx int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			rate := <-ratePool
-			defer func() {
-				ratePool <- rate
-				<-sem
-			}()
-			data, err := processTask(taskIdx, tasks[taskIdx], rate)
-			resChan <- chunkResult{data: data, err: err}
-		}(idx)
-	}
-
-	wg.Wait()
-	close(resChan)
-
 	var results []portscan.OpenPortResult
 	var firstErr error
-	for res := range resChan {
-		if res.err != nil && firstErr == nil {
-			firstErr = res.err
-		}
-		if res.err == nil {
-			results = append(results, res.data...)
-		}
+	jobCh := make(chan int, len(tasks))
+	var wg sync.WaitGroup
+	var resMu sync.Mutex
+	var errMu sync.Mutex
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobCh {
+				rate := <-ratePool
+				data, err := processTask(idx, tasks[idx], rate)
+				ratePool <- rate
+
+				if err != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					errMu.Unlock()
+					continue
+				}
+
+				if len(data) > 0 {
+					resMu.Lock()
+					results = append(results, data...)
+					resMu.Unlock()
+				}
+			}
+		}()
 	}
+
+	for idx := range tasks {
+		jobCh <- idx
+	}
+	close(jobCh)
+	wg.Wait()
 
 	if firstErr != nil {
 		return nil, firstErr

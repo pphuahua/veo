@@ -15,6 +15,7 @@ import (
 	"veo/internal/modules/fingerprint"
 	portscanpkg "veo/internal/modules/portscan"
 	masscanrunner "veo/internal/modules/portscan/masscan"
+	portscanservice "veo/internal/modules/portscan/service"
 	report "veo/internal/modules/reporter"
 	"veo/internal/utils/batch"
 	"veo/internal/utils/filter"
@@ -421,6 +422,9 @@ func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []
 	if err != nil {
 		logger.Errorf("端口扫描合并失败: %v", err)
 		return nil, nil
+	}
+	if sc.args.EnableServiceProbe {
+		results = portscanservice.Identify(context.Background(), results, portscanservice.Options{})
 	}
 	return results, aggregatePortResults(results)
 }
@@ -1034,7 +1038,11 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 			fmt.Println()
 			logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
 			for _, r := range results {
-				logger.Infof("%s:%d", r.IP, r.Port)
+				if strings.TrimSpace(r.Service) != "" {
+					logger.Infof("%s:%d (%s)", r.IP, r.Port, strings.TrimSpace(r.Service))
+				} else {
+					logger.Infof("%s:%d", r.IP, r.Port)
+				}
 			}
 			logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
 		}

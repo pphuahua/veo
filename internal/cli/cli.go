@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -29,6 +30,7 @@ import (
 	// "os/exec" // removed: masscan执行迁移至模块
 	portscanpkg "veo/internal/modules/portscan"
 	masscanrunner "veo/internal/modules/portscan/masscan"
+	portscanservice "veo/internal/modules/portscan/service"
 	report "veo/internal/modules/reporter"
 	// neturl "net/url" // not used after logic change
 )
@@ -74,8 +76,9 @@ type CLIArgs struct {
 	JSONOutput bool // 控制台输出JSON结果 (--json)
 
 	// 指纹细节输出开关
-	VeryVerbose  bool // 指纹匹配内容展示开关 (-vv)
-	NoAliveCheck bool // 跳过存活检测 (-na)
+	VeryVerbose        bool // 指纹匹配内容展示开关 (-vv)
+	NoAliveCheck       bool // 跳过存活检测 (-na)
+	EnableServiceProbe bool // 启用端口服务识别 (-sV)
 
 	// 新增：HTTP认证头部参数
 	Headers []string // 自定义HTTP认证头部 (--header "Header-Name: Header-Value")
@@ -206,11 +209,12 @@ func ParseCLIArgs() *CLIArgs {
 		outputLong = flag.String("output", "", "输出报告文件路径 (默认不输出文件)")
 
 		// 新增：实时统计显示参数
-		stats       = flag.Bool("stats", false, "启用实时扫描进度统计显示")
-		veryVerbose = flag.Bool("vv", false, "控制指纹匹配内容展示开关 (默认关闭，可使用 --vv 开启)")
-		noColor     = flag.Bool("nc", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
-		jsonOutput  = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
-		noAlive     = flag.Bool("na", false, "跳过扫描前的存活检测 (默认进行存活检测)")
+		stats        = flag.Bool("stats", false, "启用实时扫描进度统计显示")
+		veryVerbose  = flag.Bool("vv", false, "控制指纹匹配内容展示开关 (默认关闭，可使用 --vv 开启)")
+		noColor      = flag.Bool("nc", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
+		jsonOutput   = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
+		noAlive      = flag.Bool("na", false, "跳过扫描前的存活检测 (默认进行存活检测)")
+		serviceProbe = flag.Bool("sV", false, "启用端口服务识别 (默认关闭)")
 
 		// 新增：状态码过滤参数
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
@@ -248,15 +252,16 @@ func ParseCLIArgs() *CLIArgs {
 		Debug:      *debug,
 
 		// 新增参数处理：支持短参数和长参数
-		Threads:      getMaxInt(*threads, *threadsLong),
-		Retry:        *retry,
-		Timeout:      *timeout,
-		Output:       getStringValue(*output, *outputLong),
-		Stats:        *stats,
-		VeryVerbose:  *veryVerbose,
-		NoColor:      *noColor,
-		JSONOutput:   *jsonOutput,
-		NoAliveCheck: *noAlive,
+		Threads:            getMaxInt(*threads, *threadsLong),
+		Retry:              *retry,
+		Timeout:            *timeout,
+		Output:             getStringValue(*output, *outputLong),
+		Stats:              *stats,
+		VeryVerbose:        *veryVerbose,
+		NoColor:            *noColor,
+		JSONOutput:         *jsonOutput,
+		NoAliveCheck:       *noAlive,
+		EnableServiceProbe: *serviceProbe,
 
 		// 新增：HTTP认证头部参数
 		Headers: []string(headers),
@@ -1008,6 +1013,9 @@ func runMasscanPortScan(args *CLIArgs) error {
 	if err != nil {
 		return err
 	}
+	if args.EnableServiceProbe {
+		results = portscanservice.Identify(context.Background(), results, portscanservice.Options{})
+	}
 	// --json 模式：输出合并JSON（仅包含 portscan_results）到控制台；如指定 --output .json，则写入相同内容
 	if args.JSONOutput {
 		pr := aggregatePortResults(results)
@@ -1030,7 +1038,11 @@ func runMasscanPortScan(args *CLIArgs) error {
 		return nil
 	}
 	for _, r := range results {
-		logger.Infof("%s:%d", r.IP, r.Port)
+		if r.Service != "" {
+			logger.Infof("%s:%d (%s)", r.IP, r.Port, r.Service)
+		} else {
+			logger.Infof("%s:%d", r.IP, r.Port)
+		}
 	}
 	logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
 
@@ -1067,12 +1079,14 @@ func aggregatePortResults(results []portscanpkg.OpenPortResult) []report.SDKPort
 	if len(results) == 0 {
 		return nil
 	}
-	m := make(map[string]map[int]struct{})
+	m := make(map[string]map[int]string)
 	for _, r := range results {
 		if _, ok := m[r.IP]; !ok {
-			m[r.IP] = make(map[int]struct{})
+			m[r.IP] = make(map[int]string)
 		}
-		m[r.IP][r.Port] = struct{}{}
+		if _, exists := m[r.IP][r.Port]; !exists || m[r.IP][r.Port] == "" {
+			m[r.IP][r.Port] = strings.TrimSpace(r.Service)
+		}
 	}
 	out := make([]report.SDKPortResult, 0, len(m))
 	for ip, portsSet := range m {
@@ -1087,11 +1101,18 @@ func aggregatePortResults(results []portscanpkg.OpenPortResult) []report.SDKPort
 				}
 			}
 		}
-		portStrs := make([]string, len(ports))
-		for i, p := range ports {
-			portStrs[i] = strconv.Itoa(p)
+		entries := make([]report.SDKPortEntry, 0, len(ports))
+		for _, p := range ports {
+			entry := report.SDKPortEntry{
+				Port:    p,
+				Service: strings.TrimSpace(portsSet[p]),
+			}
+			if entry.Service == "" {
+				entry.Service = ""
+			}
+			entries = append(entries, entry)
 		}
-		out = append(out, report.SDKPortResult{IP: ip, Port: portStrs})
+		out = append(out, report.SDKPortResult{IP: ip, Ports: entries})
 	}
 	return out
 }

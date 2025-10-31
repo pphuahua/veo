@@ -33,8 +33,13 @@ type SDKSummary struct {
 
 // SDKPortResult 端口扫描结果（用于合并报告）
 type SDKPortResult struct {
-	IP   string   `json:"ip"`
-	Port []string `json:"port"`
+	IP    string         `json:"ip"`
+	Ports []SDKPortEntry `json:"ports"`
+}
+
+type SDKPortEntry struct {
+	Port    int    `json:"port"`
+	Service string `json:"service,omitempty"`
 }
 
 type SDKPageResult struct {
