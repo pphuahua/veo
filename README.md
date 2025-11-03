@@ -3,6 +3,8 @@ VEO 是一款专注于目录探测、指纹识别和敏感信息发现。**欢�
 
 ---
 ![https://youke1.picui.cn/s1/2025/10/24/68fb5aa3b09a6.jpg](https://youke1.picui.cn/s1/2025/10/24/68fb5aa3b09a6.jpg)
+![https://asciinema.org/a/nNomQmVMS7vfU6TKbPtCI7Nd0](https://asciinema.org/a/nNomQmVMS7vfU6TKbPtCI7Nd0)
+
 
 ## 更新日志 
 
