@@ -21,3 +21,6 @@ test.go
 /plans
 internal/modules/portscan/masscan/assets/README.txt
 paused.conf
+/node_modules
+package-lock.json
+package.json

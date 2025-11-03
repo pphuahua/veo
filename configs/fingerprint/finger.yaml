@@ -3353,7 +3353,7 @@ api-docs:
     - "contains(body, 'xiansen_logo.png','山东先森网络科技有限公司提供技术支持','images/login_btn.gif')"
     - "contains(url, '/zhqw/')"
 
-WebServiceWeb服务:
+WebService服务:
   dsl:
     - "contains(body, 'WebService.asmx?WSDL','microsoft.com/webservices')"
 

@@ -55,11 +55,12 @@ type CLIArgs struct {
 	Modules    []string // 启用的模块 (-m)
 	Port       int      // 监听端口 (-lp)
 	// 端口扫描（masscan）相关
-	Ports    string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
-	Rate     int    // 扫描速率 (--rate，包/秒)
-	Wordlist string // 自定义字典路径 (-w)
-	Listen   bool   // 被动代理模式 (--listen)
-	Debug    bool   // 调试模式 (--debug)
+	Ports        string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
+	Rate         int    // 扫描速率 (--rate，包/秒)
+	PortWordlist string // 端口字典路径 (-pw)，当未指定 -p 时使用
+	Wordlist     string // 自定义字典路径 (-w)
+	Listen       bool   // 被动代理模式 (--listen)
+	Debug        bool   // 调试模式 (--debug)
 
 	// 新增：线程并发控制和全局配置参数
 	Threads int // 统一线程并发数量 (-t, --threads)
@@ -145,8 +146,10 @@ func Execute() {
 
 	// 仅端口扫描模式：-m port
 	if !args.Listen && args.HasModule("port") && len(args.Modules) == 1 {
-		if strings.TrimSpace(args.Ports) == "" {
-			logger.Fatalf("端口扫描模块需要指定 -p 端口范围，例如: -p 1-600,80,8001,800-900")
+		if _, source, err := ensurePortExpression(args); err != nil {
+			logger.Fatalf("端口扫描参数错误: %v", err)
+		} else if source != "" {
+			logger.Infof("使用端口字典: %s", source)
 		}
 		if err := runMasscanPortScan(args); err != nil {
 			logger.Fatalf("端口扫描失败: %v", err)
@@ -177,8 +180,13 @@ func Execute() {
 		if err := runActiveScanMode(args); err != nil {
 			logger.Fatalf("主动扫描失败: %v", err)
 		}
-		// 若用户指定了 -p，则在正常扫描完成后执行端口扫描（仅当未输出合并JSON文件时）
-		if strings.TrimSpace(args.Ports) != "" && !args.JSONOutput && !strings.HasSuffix(strings.ToLower(args.Output), ".json") {
+		// 若启用端口模块，则在正常扫描完成后执行端口扫描（仅当未输出合并JSON文件时）
+		if args.HasModule("port") && !args.JSONOutput && !strings.HasSuffix(strings.ToLower(args.Output), ".json") {
+			if _, source, err := ensurePortExpression(args); err != nil {
+				logger.Fatalf("端口扫描参数错误: %v", err)
+			} else if source != "" {
+				logger.Infof("使用端口字典: %s", source)
+			}
 			if err := runMasscanPortScan(args); err != nil {
 				logger.Fatalf("端口扫描失败: %v", err)
 			}
@@ -189,15 +197,16 @@ func Execute() {
 // ParseCLIArgs 解析命令行参数
 func ParseCLIArgs() *CLIArgs {
 	var (
-		targetsStr = flag.String("u", "", "目标主机/URL，多个目标用逗号分隔 (例如: -u www.baidu.com,api.baidu.com)")
-		targetFile = flag.String("f", "", "目标文件路径，每行一个目标 (例如: -f targets.txt)")
-		modulesStr = flag.String("m", "", "启用的模块，多个模块用逗号分隔 (例如: -m finger,dirscan)")
-		localPort  = flag.Int("lp", 9080, "本地代理监听端口，仅在被动模式下使用 (默认: 9080)")
-		portsArg   = flag.String("p", "", "端口范围，支持单端口或范围，逗号分隔 (例如: -p 80,443,8000-8100 或 1-65535)")
-		rateArg    = flag.Int("rate", 0, "端口扫描速率(包/秒)，仅在启用端口扫描时使用 (例如: --rate 10000)")
-		wordlist   = flag.String("w", "", "自定义字典文件路径 (例如: -w /path/to/custom.txt)")
-		listen     = flag.Bool("listen", false, "启用被动代理模式 (默认: 主动扫描模式)")
-		debug      = flag.Bool("debug", false, "启用调试模式，显示详细日志 (默认: 仅显示INFO及以上级别)")
+		targetsStr   = flag.String("u", "", "目标主机/URL，多个目标用逗号分隔 (例如: -u www.baidu.com,api.baidu.com)")
+		targetFile   = flag.String("f", "", "目标文件路径，每行一个目标 (例如: -f targets.txt)")
+		modulesStr   = flag.String("m", "", "启用的模块，多个模块用逗号分隔 (例如: -m finger,dirscan)")
+		localPort    = flag.Int("lp", 9080, "本地代理监听端口，仅在被动模式下使用 (默认: 9080)")
+		portsArg     = flag.String("p", "", "端口范围，支持单端口或范围，逗号分隔 (例如: -p 80,443,8000-8100 或 1-65535)")
+		portWordlist = flag.String("pw", "configs/port/web.txt", "端口字典文件路径或预设名称(top/web/service)，当未指定 -p 时使用")
+		rateArg      = flag.Int("rate", 0, "端口扫描速率(包/秒)，仅在启用端口扫描时使用 (例如: --rate 10000)")
+		wordlist     = flag.String("w", "", "自定义字典文件路径 (例如: -w /path/to/custom.txt)")
+		listen       = flag.Bool("listen", false, "启用被动代理模式 (默认: 主动扫描模式)")
+		debug        = flag.Bool("debug", false, "启用调试模式，显示详细日志 (默认: 仅显示INFO及以上级别)")
 
 		// 新增：线程并发控制和全局配置参数
 		threads     = flag.Int("t", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
@@ -244,13 +253,14 @@ func ParseCLIArgs() *CLIArgs {
 
 	// 创建CLIArgs实例
 	args := &CLIArgs{
-		TargetFile: *targetFile,
-		Port:       *localPort,
-		Ports:      *portsArg,
-		Rate:       *rateArg,
-		Wordlist:   *wordlist,
-		Listen:     *listen,
-		Debug:      *debug,
+		TargetFile:   *targetFile,
+		Port:         *localPort,
+		Ports:        *portsArg,
+		Rate:         *rateArg,
+		PortWordlist: strings.TrimSpace(*portWordlist),
+		Wordlist:     *wordlist,
+		Listen:       *listen,
+		Debug:        *debug,
 
 		// 新增参数处理：支持短参数和长参数
 		Threads:            getMaxInt(*threads, *threadsLong),
@@ -346,6 +356,7 @@ veo - 端口扫描/指纹识别/目录扫描
 
 端口扫描:
   -p string            端口表达式，例如 80,443,8000-8100
+  -pw string           端口字典文件或预设(top/web/service)，未指定 -p 时使用
   --rate int           探测速率，默认 2048；大于 2048 时按 2048 为一批运行
   -sV                  启用服务识别（内置指纹 + HTTP fallback）
 
@@ -445,8 +456,8 @@ func validateArgs(args *CLIArgs) error {
 
 	// 端口扫描模块需要指定端口范围
 	if args.HasModule("port") && !args.Listen {
-		if strings.TrimSpace(args.Ports) == "" {
-			return fmt.Errorf("端口扫描模块需要指定 -p 端口范围，例如: -p 1-600,80,8001,800-900")
+		if len(args.Targets) == 0 && strings.TrimSpace(args.TargetFile) == "" {
+			return fmt.Errorf("端口扫描需要通过 -u 或 -f 指定目标")
 		}
 	}
 
@@ -818,13 +829,17 @@ func createProxy() (*proxy.Proxy, error) {
 func runMasscanPortScan(args *CLIArgs) error {
 	effectiveRate := masscanrunner.ComputeEffectiveRate(args.Rate)
 
-	// 端口表达式：若未指定 -p 且未使用 -f，则从URL中推导（默认80/443或URL显式端口）
-	portsExpr := strings.TrimSpace(args.Ports)
-	if portsExpr == "" && strings.TrimSpace(args.TargetFile) == "" {
-		portsExpr = masscanrunner.DerivePortsFromTargets(args.Targets)
-		if portsExpr == "" {
-			return fmt.Errorf("未指定 -p 且无法从URL目标推导端口")
+	portsExpr, portSource, err := ensurePortExpression(args)
+	if err != nil {
+		fallback := masscanrunner.DerivePortsFromTargets(args.Targets)
+		if strings.TrimSpace(fallback) == "" {
+			return fmt.Errorf("加载端口字典失败: %v", err)
 		}
+		portsExpr = fallback
+		args.Ports = fallback
+		logger.Warnf("加载端口字典失败: %v，改用目标推导端口: %s", err, portsExpr)
+	} else if portSource != "" {
+		logger.Infof("使用端口字典: %s", portSource)
 	}
 
 	// 目标转换：若使用 -u，则将URL/域名转换为IP列表；若 -f 则保持 -iL 传参
@@ -839,7 +854,7 @@ func runMasscanPortScan(args *CLIArgs) error {
 
 	// 模块开始前空行，提升可读性
 	fmt.Println()
-	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
+	logPortScanBanner(portsExpr, effectiveRate)
 	opts := portscanpkg.Options{
 		Ports:      portsExpr,
 		Rate:       effectiveRate,
@@ -1366,4 +1381,61 @@ func normalizeTargetHost(raw string) (host string, port string, wildcard bool) {
 	}
 	lower := strings.ToLower(hostPart)
 	return lower, port, strings.HasPrefix(lower, "*.")
+}
+
+func ensurePortExpression(args *CLIArgs) (string, string, error) {
+	existing := strings.TrimSpace(args.Ports)
+	if existing != "" {
+		return existing, "", nil
+	}
+	ports, source, err := resolvePortWordlist(args.PortWordlist)
+	if err != nil {
+		return "", source, err
+	}
+	args.Ports = ports
+	args.PortWordlist = source
+	return ports, source, nil
+}
+
+func resolvePortWordlist(wordlist string) (string, string, error) {
+	candidate := strings.TrimSpace(wordlist)
+	if candidate == "" {
+		candidate = "configs/port/web.txt"
+	}
+	lower := strings.ToLower(candidate)
+	path := candidate
+	switch lower {
+	case "web":
+		path = "configs/port/web.txt"
+	case "service":
+		path = "configs/port/service.txt"
+	case "top":
+		path = "configs/port/top.txt"
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", path, err
+	}
+	ports := normalizePortList(string(data))
+	if ports == "" {
+		return "", path, fmt.Errorf("端口字典 %s 为空", path)
+	}
+	return ports, path, nil
+}
+
+func normalizePortList(content string) string {
+	if content == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("\r", "\n", "\t", "\n", ";", "\n")
+	clean := replacer.Replace(content)
+	fields := strings.FieldsFunc(clean, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
+	})
+	return strings.Join(fields, ",")
+}
+
+func logPortScanBanner(ports string, rate int) {
+	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate: %d", ports, rate)))
 }

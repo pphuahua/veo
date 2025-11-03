@@ -406,11 +406,26 @@ func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []inter
 //   - []portscanpkg.OpenPortResult 原始结果
 //   - []report.SDKPortResult 聚合为每个IP一个条目的端口数组
 func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []report.SDKPortResult) {
-	if strings.TrimSpace(sc.args.Ports) == "" {
-		return nil, nil
-	}
 	effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
 	portsExpr := strings.TrimSpace(sc.args.Ports)
+	if portsExpr == "" {
+		var err error
+		var source string
+		portsExpr, source, err = ensurePortExpression(sc.args)
+		if err != nil {
+			fallback := masscanrunner.DerivePortsFromTargets(sc.args.Targets)
+			if strings.TrimSpace(fallback) == "" {
+				logger.Errorf("加载端口字典失败: %v", err)
+				return nil, nil
+			}
+			portsExpr = fallback
+			sc.args.Ports = fallback
+			logger.Warnf("加载端口字典失败: %v，改用目标推导端口: %s", err, portsExpr)
+		}
+		if source != "" {
+			logger.Infof("使用端口字典: %s", source)
+		}
+	}
 	var targets []string
 	if strings.TrimSpace(sc.args.TargetFile) == "" {
 		if ips, err := masscanrunner.ResolveTargetsToIPs(sc.args.Targets); err == nil {
@@ -1036,7 +1051,7 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 
 			// 控制台打印（一致的指示器与端口行）
 			fmt.Println()
-			logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", portsExpr, effectiveRate)))
+			logPortScanBanner(portsExpr, effectiveRate)
 			for _, r := range results {
 				if strings.TrimSpace(r.Service) != "" {
 					logger.Infof("%s:%d (%s)", r.IP, r.Port, strings.TrimSpace(r.Service))
