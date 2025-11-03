@@ -436,28 +436,50 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 // makeRequest 使用fasthttp发起请求
 func (rp *RequestProcessor) makeRequest(rawURL string) (*interfaces.HTTPResponse, error) {
 	req := fasthttp.AcquireRequest()
-	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(resp)
 
-	// 准备请求
 	rp.prepareRequest(req, rawURL)
 	startTime := time.Now()
 
-	// 执行HTTP请求
-	err := rp.executeHTTPRequest(req, resp, rawURL)
-	if err != nil {
-		rp.logRequestError(rawURL, err)
-		return nil, fmt.Errorf("请求失败: %v", err)
+	var (
+		resp        *fasthttp.Response
+		finalURL    string
+		statusChain []int
+		err         error
+	)
+
+	if rp.config.FollowRedirect {
+		resp, finalURL, statusChain, err = rp.performRequestWithRedirects(req, rawURL)
+	} else {
+		resp = fasthttp.AcquireResponse()
+		err = rp.client.DoTimeout(req, resp, rp.config.Timeout)
+		finalURL = rawURL
+		if err == nil {
+			statusChain = []int{resp.StatusCode()}
+		}
 	}
 
-	// 记录请求完成日志
+	if err != nil {
+		rp.logRequestError(rawURL, err)
+		if resp != nil {
+			fasthttp.ReleaseResponse(resp)
+		}
+		return nil, fmt.Errorf("请求失败: %v", err)
+	}
+	if len(statusChain) == 0 {
+		statusChain = []int{resp.StatusCode()}
+	}
+
 	duration := time.Since(startTime)
 	logger.Debug(fmt.Sprintf("fasthttp请求完成: %s [%d] 耗时: %v",
-		rawURL, resp.StatusCode(), duration))
+		rawURL, statusChain[len(statusChain)-1], duration))
 
-	// 构建响应对象
-	return rp.buildHTTPResponse(rawURL, req, resp, startTime)
+	response, buildErr := rp.buildHTTPResponse(rawURL, finalURL, statusChain, req, resp, startTime)
+	fasthttp.ReleaseResponse(resp)
+	if buildErr != nil {
+		return nil, buildErr
+	}
+	return response, nil
 }
 
 // prepareRequest 准备HTTP请求
@@ -467,60 +489,58 @@ func (rp *RequestProcessor) prepareRequest(req *fasthttp.Request, rawURL string)
 	rp.setRequestHeaders(&req.Header)
 }
 
-// executeHTTPRequest 执行HTTP请求（支持重定向处理）
-func (rp *RequestProcessor) executeHTTPRequest(req *fasthttp.Request, resp *fasthttp.Response, rawURL string) error {
-	if rp.config.FollowRedirect {
-		return rp.executeWithRedirect(req, resp, rawURL)
+// performRequestWithRedirects 执行HTTP请求并跟随重定向，返回最终响应及重定向链
+func (rp *RequestProcessor) performRequestWithRedirects(baseReq *fasthttp.Request, rawURL string) (*fasthttp.Response, string, []int, error) {
+	currentURL := rawURL
+	statusChain := make([]int, 0, 6)
+
+	var finalResp *fasthttp.Response
+	const maxRedirects = 5
+
+	for redirect := 0; redirect <= maxRedirects; redirect++ {
+		req := fasthttp.AcquireRequest()
+		baseReq.CopyTo(req)
+		req.SetRequestURI(currentURL)
+
+		resp := fasthttp.AcquireResponse()
+		err := rp.client.DoTimeout(req, resp, rp.config.Timeout)
+		fasthttp.ReleaseRequest(req)
+		if err != nil {
+			fasthttp.ReleaseResponse(resp)
+			return nil, "", statusChain, err
+		}
+
+		status := resp.StatusCode()
+		statusChain = append(statusChain, status)
+
+		if !rp.isRedirectStatus(status) {
+			finalResp = resp
+			break
+		}
+
+		location := rp.findLocationHeader(resp)
+		if location == "" {
+			fasthttp.ReleaseResponse(resp)
+			return nil, "", statusChain, fmt.Errorf("重定向响应缺少Location头")
+		}
+
+		nextURL, err := rp.resolveRedirectURL(currentURL, location)
+		if err != nil {
+			fasthttp.ReleaseResponse(resp)
+			return nil, "", statusChain, err
+		}
+
+		fasthttp.ReleaseResponse(resp)
+		currentURL = nextURL
+		if redirect == maxRedirects {
+			return nil, "", statusChain, fmt.Errorf("超过最大重定向次数: %d", maxRedirects)
+		}
 	}
 
-	logger.Debugf("fasthttp请求（不跟随重定向）: %s", rawURL)
-	return rp.client.DoTimeout(req, resp, rp.config.Timeout)
-}
-
-// executeWithRedirect 执行支持重定向的HTTP请求
-func (rp *RequestProcessor) executeWithRedirect(req *fasthttp.Request, resp *fasthttp.Response, rawURL string) error {
-	logger.Debugf("fasthttp请求（跟随重定向）: %s", rawURL)
-
-	// 首先尝试fasthttp的DoRedirects方法
-	err := rp.client.DoRedirects(req, resp, 5)
-	if err == nil {
-		return nil
+	if finalResp == nil {
+		return nil, "", statusChain, fmt.Errorf("未获取最终响应")
 	}
-
-	// 如果是重定向错误，尝试手动重定向
-	if rp.isRedirectError(err) {
-		return rp.handleRedirectError(req, resp, rawURL, err)
-	}
-
-	return err
-}
-
-// handleRedirectError 处理重定向错误
-func (rp *RequestProcessor) handleRedirectError(req *fasthttp.Request, resp *fasthttp.Response, rawURL string, originalErr error) error {
-	logger.Debugf("fasthttp重定向失败，尝试手动重定向: %s, 错误: %v", rawURL, originalErr)
-
-	// 释放当前响应
-	fasthttp.ReleaseResponse(resp)
-
-	// 使用手动重定向跟随
-	manualResp, manualErr := rp.followRedirectManually(rawURL, 5)
-	if manualErr == nil {
-		// 将手动重定向的响应复制到原响应对象
-		*resp = *manualResp
-		logger.Debugf("手动重定向成功: %s [%d]", rawURL, resp.StatusCode())
-		return nil
-	}
-
-	logger.Warnf("手动重定向失败: %s, 错误: %v", rawURL, manualErr)
-
-	// 最后回退：不跟随重定向的方式
-	*resp = *fasthttp.AcquireResponse()
-	rp.setupRequest(req, rawURL)
-	err := rp.client.DoTimeout(req, resp, rp.config.Timeout)
-	if err == nil {
-		logger.Debugf("回退到不跟随重定向: %s [%d]", rawURL, resp.StatusCode())
-	}
-	return err
+	return finalResp, currentURL, statusChain, nil
 }
 
 // logRequestError 记录请求错误日志
@@ -535,9 +555,9 @@ func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
 }
 
 // buildHTTPResponse 构建HTTP响应对象
-func (rp *RequestProcessor) buildHTTPResponse(rawURL string, req *fasthttp.Request, resp *fasthttp.Response, startTime time.Time) (*interfaces.HTTPResponse, error) {
+func (rp *RequestProcessor) buildHTTPResponse(rawURL, finalURL string, statusChain []int, req *fasthttp.Request, resp *fasthttp.Response, startTime time.Time) (*interfaces.HTTPResponse, error) {
 	requestHeaders := rp.extractRequestHeaders(&req.Header)
-	return rp.processResponse(rawURL, resp, requestHeaders, startTime)
+	return rp.processResponse(rawURL, finalURL, statusChain, resp, requestHeaders, startTime)
 }
 
 // ===========================================
@@ -549,6 +569,7 @@ func (rp *RequestProcessor) buildHTTPResponse(rawURL string, req *fasthttp.Reque
 // 参数：
 //   - workerCount: 工作线程数量
 //   - bufferType: 缓冲区类型（"task" 或 "result"）
+//
 // 返回：最优的缓冲区大小
 func calculateOptimalBufferSize(workerCount int, bufferType string) int {
 	baseSize := workerCount * 2 // 基础缓冲区大小：工作线程数的2倍
@@ -580,6 +601,7 @@ func calculateOptimalBufferSize(workerCount int, bufferType string) int {
 // 参数：
 //   - workerCount: 工作线程数量
 //   - processor: 请求处理器实例
+//
 // 返回：配置完成的工作池实例
 func NewWorkerPool(workerCount int, processor *RequestProcessor) *WorkerPool {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -802,25 +824,38 @@ func (rp *RequestProcessor) processResponseBody(rawBody []byte) string {
 }
 
 // processResponse 处理fasthttp响应，构建HTTPResponse结构体
-func (rp *RequestProcessor) processResponse(url string, resp *fasthttp.Response, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
+func (rp *RequestProcessor) processResponse(originalURL, finalURL string, statusChain []int, resp *fasthttp.Response, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
 	// 提取响应基本信息
 	body := rp.processResponseBody(resp.Body())
-	title := rp.extractTitleSafely(url, body)
+	title := rp.extractTitleSafely(finalURL, body)
 	contentLength := rp.getContentLength(resp, body)
 	contentType := rp.getContentType(resp)
-	responseHeaders := rp.extractResponseHeadersSafely(url, resp)
-	server := rp.extractServerInfoSafely(url, resp)
+	responseHeaders := rp.extractResponseHeadersSafely(finalURL, resp)
+	server := rp.extractServerInfoSafely(finalURL, resp)
 	duration := time.Since(startTime).Milliseconds()
 
+	if len(statusChain) == 0 {
+		statusChain = []int{resp.StatusCode()}
+	}
+	originalStatus := statusChain[0]
+	finalStatus := statusChain[len(statusChain)-1]
+
 	// 构建响应对象
-	response := rp.buildResponseObject(url, resp, title, contentLength, contentType, body, responseHeaders, requestHeaders, server, duration)
+	response := rp.buildResponseObject(originalURL, finalURL, statusChain, title, contentLength, contentType, body, responseHeaders, requestHeaders, server, duration)
+	response.FinalStatusCode = finalStatus
+	response.Redirected = len(statusChain) > 1
 
 	// 新增：处理认证检测（仅在401/403响应时且未设置自定义头部时）
-	rp.handleAuthDetection(resp, url)
+	rp.handleAuthDetection(resp, finalURL)
 
 	// 记录处理完成日志
-	logger.Debug(fmt.Sprintf("响应处理完成: %s [%d] %s, 响应头数量: %d, 耗时: %dms",
-		url, resp.StatusCode(), title, len(responseHeaders), duration))
+	if len(statusChain) > 1 {
+		logger.Debug(fmt.Sprintf("响应处理完成: %s [%d -> %d] %s, 响应头数量: %d, 耗时: %dms",
+			originalURL, originalStatus, finalStatus, title, len(responseHeaders), duration))
+	} else {
+		logger.Debug(fmt.Sprintf("响应处理完成: %s [%d] %s, 响应头数量: %d, 耗时: %dms",
+			originalURL, originalStatus, title, len(responseHeaders), duration))
+	}
 
 	return response, nil
 }
@@ -911,11 +946,18 @@ func (rp *RequestProcessor) extractServerInfoSafely(url string, resp *fasthttp.R
 }
 
 // buildResponseObject 构建响应对象
-func (rp *RequestProcessor) buildResponseObject(url string, resp *fasthttp.Response, title string, contentLength int64, contentType, body string, responseHeaders, requestHeaders map[string][]string, server string, duration int64) *interfaces.HTTPResponse {
+func (rp *RequestProcessor) buildResponseObject(originalURL, finalURL string, statusChain []int, title string, contentLength int64, contentType, body string, responseHeaders, requestHeaders map[string][]string, server string, duration int64) *interfaces.HTTPResponse {
+	originalStatus := 0
+	finalStatus := 0
+	if len(statusChain) > 0 {
+		originalStatus = statusChain[0]
+		finalStatus = statusChain[len(statusChain)-1]
+	}
 	return &interfaces.HTTPResponse{
-		URL:             url,
+		URL:             originalURL,
 		Method:          "GET",
-		StatusCode:      resp.StatusCode(),
+		StatusCode:      originalStatus,
+		FinalStatusCode: finalStatus,
 		Title:           title,
 		ContentLength:   contentLength,
 		ContentType:     contentType,
@@ -923,11 +965,13 @@ func (rp *RequestProcessor) buildResponseObject(url string, resp *fasthttp.Respo
 		ResponseHeaders: responseHeaders,
 		RequestHeaders:  requestHeaders,
 		Server:          server,
-		IsDirectory:     rp.isDirectoryURL(url),
+		IsDirectory:     rp.isDirectoryURL(originalURL),
 		Length:          contentLength,
 		Duration:        duration,
 		Depth:           0,    // 深度信息需要外部设置
 		ResponseBody:    body, // 报告用响应体
+		FinalURL:        finalURL,
+		RedirectChain:   append([]int(nil), statusChain...),
 	}
 }
 

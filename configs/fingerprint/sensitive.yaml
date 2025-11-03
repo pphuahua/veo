@@ -309,3 +309,8 @@ email:
 列目录:
   dsl:
   - contains(body, '</A><br></pre><hr></body></html>')
+
+Portainer:
+  dsl:
+  - title('Portainer面板')
+  - contains(body, 'portainer.updatePassword','portainer.init.admin','images/logo_alt.png')

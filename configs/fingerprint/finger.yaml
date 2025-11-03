@@ -3389,3 +3389,7 @@ ureport:
   dsl:
     - "title('维保保')"
     - "contains(body, 'upload/login/logo.png','user/goChangePasswordNew.do','plugins/wbb/RSA.js')"
+
+knife4j-doc:
+  dsl:
+    - "contains(body, 'We're sorry but knife4j-vue','knife4j-vue')"

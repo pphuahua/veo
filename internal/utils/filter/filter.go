@@ -1,17 +1,17 @@
 package filter
 
 import (
-    "fmt"
-    "reflect"
-    "strings"
-    "sync"
-    "sync/atomic"
-    "time"
-    "veo/internal/core/interfaces"
-    "veo/internal/core/logger"
-    "veo/internal/utils/filter/strategy"
-    "veo/internal/utils/formatter"
-    sharedutils "veo/internal/utils/shared"
+	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"veo/internal/core/interfaces"
+	"veo/internal/core/logger"
+	"veo/internal/utils/filter/strategy"
+	"veo/internal/utils/formatter"
+	sharedutils "veo/internal/utils/shared"
 )
 
 // FilterConfig 过滤器配置（独立配置，不依赖外部config包）
@@ -551,6 +551,15 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 
 		var messageBuilder strings.Builder
 		messageBuilder.WriteString(baseInfo)
+		if page.FinalStatusCode > 0 && page.FinalStatusCode != page.StatusCode {
+			messageBuilder.WriteString(" -> ")
+			messageBuilder.WriteString(formatStatusCode(page.FinalStatusCode))
+			finalURL := strings.TrimSpace(page.FinalURL)
+			if finalURL != "" && !strings.EqualFold(strings.TrimRight(finalURL, "/"), strings.TrimRight(page.URL, "/")) {
+				messageBuilder.WriteString(" ")
+				messageBuilder.WriteString(formatURL(finalURL))
+			}
+		}
 		if fingerprintStr != "" {
 			messageBuilder.WriteString(" ")
 			messageBuilder.WriteString(fingerprintStr)
@@ -907,7 +916,7 @@ func (rf *ResponseFilter) decompressResponseBody(body string, headers map[string
 		return body
 	}
 
-    logger.Debugf("检测到压缩编码: %s", contentEncoding)
-    decompressed := sharedutils.DecompressByEncoding([]byte(body), contentEncoding)
-    return string(decompressed)
+	logger.Debugf("检测到压缩编码: %s", contentEncoding)
+	decompressed := sharedutils.DecompressByEncoding([]byte(body), contentEncoding)
+	return string(decompressed)
 }
