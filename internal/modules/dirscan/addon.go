@@ -64,7 +64,7 @@ func (da *DirscanAddon) Enable() {
 	}
 	logger.Debugf("目录扫描插件已启用")
 
-	// [重要] 预加载字典文件，提升用户体验
+	// 预加载字典文件，提升用户体验
 	da.preloadDictionaries()
 }
 
@@ -224,7 +224,7 @@ func (da *DirscanAddon) StartInputListener() {
 	}
 
 	go da.runInputListener()
-	// [重要] 启动URL状态监控器
+	// 启动URL状态监控器
 	logger.Debugf("输入监听器已启动")
 }
 
@@ -256,10 +256,10 @@ func (da *DirscanAddon) handleScanTrigger() {
 	}
 
 	if result != nil {
-		logger.Infof("Scan Sucess，Times: %v，Result: %d",
+		logger.Infof("Scan Success，Times: %v，Result: %d",
 			result.Duration, len(result.FilterResult.ValidPages))
 		if result.ReportPath != "" {
-			logger.Infof("Scan Report: %s", result.ReportPath)
+			logger.Infof("Scan Report Output: %s", result.ReportPath)
 		}
 	}
 

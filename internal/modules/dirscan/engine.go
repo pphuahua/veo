@@ -105,7 +105,7 @@ func (e *Engine) PerformScan(collectorInstance interfaces.URLCollectorInterface)
 	atomic.StoreInt64(&e.stats.TotalGenerated, int64(len(scanURLs)))
 
 	// 3. 执行HTTP请求
-	// [重要] 在开始处理前显示确认信息（显示实际的并发数）
+	// 在开始处理前显示确认信息（显示实际的并发数）
 	actualConcurrency := e.getActualConcurrency()
 	logger.Infof("%d URL，Threads: %d，Random UA: true", len(scanURLs), actualConcurrency)
 
@@ -290,11 +290,11 @@ func (e *Engine) generateReport(filterResult *interfaces.FilterResult, target st
 	return reportPath, nil
 }
 
-// convertToFilterResponses 转换响应格式（[重要] 内存优化版本）
+// convertToFilterResponses 转换响应格式（内存优化版本）
 func (e *Engine) convertToFilterResponses(httpResponses []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 	filterResponses := make([]interfaces.HTTPResponse, len(httpResponses))
 	for i, resp := range httpResponses {
-		// [重要] 内存优化：只复制过滤器真正需要的4个核心字段
+		// 内存优化：只复制过滤器真正需要的4个核心字段
 		// 分析过滤器实现发现只需要：URL、StatusCode、ContentLength、ContentType、Title、Body
 		filterResponses[i] = interfaces.HTTPResponse{
 			URL:           resp.URL,                   // 结果展示需要
@@ -303,14 +303,14 @@ func (e *Engine) convertToFilterResponses(httpResponses []*interfaces.HTTPRespon
 			ContentType:   resp.ContentType,           // Content-Type过滤器使用
 			Title:         resp.Title,                 // 哈希过滤器生成页面哈希使用
 			Body:          e.getFilterBody(resp.Body), // 哈希计算使用（已截断）
-			// [重要] 内存优化：其他字段使用零值，大幅减少内存占用
+			// 内存优化：其他字段使用零值，大幅减少内存占用
 			// Method、Server、IsDirectory、Length、Duration、Depth等字段在过滤器中未使用
 		}
 	}
 	return filterResponses
 }
 
-// getFilterBody 获取用于过滤的响应体（[重要] 内存优化）
+// getFilterBody 获取用于过滤的响应体（内存优化）
 func (e *Engine) getFilterBody(body string) string {
 	// 过滤器只需要响应体的前部分用于哈希计算
 	const maxFilterBodySize = 4096 // 4KB足够用于过滤判断

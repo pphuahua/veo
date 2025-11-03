@@ -59,7 +59,7 @@ func (fpt *FingerprintProgressTracker) UpdateProgress(stepName string) {
 	fpt.mu.Lock()
 	defer fpt.mu.Unlock()
 
-	// [重要] 边界条件检查：防止计数器超过总步骤数
+	// 边界条件检查：防止计数器超过总步骤数
 	if fpt.currentStep >= fpt.totalSteps {
 		// 已经完成，不再更新进度
 		return
@@ -67,7 +67,7 @@ func (fpt *FingerprintProgressTracker) UpdateProgress(stepName string) {
 
 	fpt.currentStep++
 
-	// [重要] 确保百分比不超过100%
+	// 确保百分比不超过100%
 	percentage := float64(fpt.currentStep) / float64(fpt.totalSteps) * 100
 	if percentage > 100.0 {
 		percentage = 100.0
@@ -126,7 +126,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		Timeout:        time.Duration(requestConfigFromFile.Timeout) * time.Second, // [修复] 使用配置文件中的超时时间（包含CLI参数覆盖）
 		MaxRetries:     requestConfigFromFile.Retry,                                // [修复] 使用配置文件中的重试次数（包含CLI参数覆盖）
 		MaxConcurrent:  requestConfigFromFile.Threads,                              // [修复] 使用配置文件中的线程数（包含CLI参数覆盖）
-		FollowRedirect: true,                                                       // [重要] 修复：启用重定向跟随，确保指纹识别准确性
+		FollowRedirect: true,                                                       // 修复：启用重定向跟随，确保指纹识别准确性
 	}
 
 	// 如果配置文件中的线程数为0，使用默认值200
@@ -151,7 +151,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	logger.Debugf("请求处理器重试次数设置为: %d", requestConfig.MaxRetries)
 	logger.Debugf("请求处理器超时时间设置为: %v", requestConfig.Timeout)
 
-	// [重要] 修复重复加载：主动模式复用被动模式的指纹引擎
+	// 修复重复加载：主动模式复用被动模式的指纹引擎
 	var fpEngine *fingerprint.Engine
 	if mode == ActiveMode {
 		// 获取全局指纹识别插件实例（由被动模式创建）
@@ -166,7 +166,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	// 创建请求处理器并自定义防缓存头部
 	requestProcessor := requests.NewRequestProcessor(requestConfig)
 
-	// [重要] 为指纹识别模式设置模块上下文，禁用processor进度条
+	// 为指纹识别模式设置模块上下文，禁用processor进度条
 	// 注意：这里只为纯指纹识别模式设置，混合模式需要在运行时动态设置
 	if mode == ActiveMode && len(args.Modules) == 1 && args.Modules[0] == "finger" {
 		requestProcessor.SetModuleContext("fingerprint")
@@ -241,7 +241,7 @@ func (sc *ScanController) runActiveMode() error {
 	var dirscanResults []interfaces.HTTPResponse
 	var fingerprintResults []interfaces.HTTPResponse
 
-	// [重要] 顺序执行各个模块，避免模块上下文冲突
+	// 顺序执行各个模块，避免模块上下文冲突
 	// 优化执行顺序：指纹识别优先，然后目录扫描
 	orderedModules := sc.getOptimizedModuleOrder()
 
@@ -540,7 +540,7 @@ func (sc *ScanController) runModuleForTargets(moduleName string, targets []strin
 	}
 }
 
-// runDirscanModule 运行目录扫描模块（[重要] 多目标并发优化）
+// runDirscanModule 运行目录扫描模块（多目标并发优化）
 func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPResponse, error) {
 	// 模块启动提示
 	dictInfo := "dict/common.txt"
@@ -552,7 +552,7 @@ func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPR
 	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Dirscan, Loaded Dict: %s", dictInfo)))
 	logger.Debugf("开始目录扫描，目标数量: %d", len(targets))
 
-	// [重要] 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
+	// 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
 	if len(targets) > 1 {
 		return sc.runConcurrentDirscan(targets)
 	}
@@ -568,7 +568,7 @@ func (sc *ScanController) runConcurrentDirscan(targets []string) ([]interfaces.H
 	// 创建目标调度器
 	scheduler := scheduler.NewTargetScheduler(targets, sc.config)
 
-	// [重要] 设置基础请求处理器，确保统计更新正常工作
+	// 设置基础请求处理器，确保统计更新正常工作
 	scheduler.SetBaseRequestProcessor(sc.requestProcessor)
 
 	// 执行并发扫描
@@ -662,7 +662,7 @@ func (sc *ScanController) runSequentialDirscan(targets []string) ([]interfaces.H
 			}
 		}
 
-		// [重要] 更新已完成主机数统计（单目标扫描）
+		// 更新已完成主机数统计（单目标扫描）
 		if sc.statsDisplay.IsEnabled() {
 			sc.statsDisplay.IncrementCompletedHosts()
 			logger.Debugf("单目标扫描完成目标 %s，更新已完成主机数", target)
@@ -671,7 +671,7 @@ func (sc *ScanController) runSequentialDirscan(targets []string) ([]interfaces.H
 	return allResults, nil
 }
 
-// runFingerprintModule 运行指纹识别模块（[重要] 多目标并发优化）
+// runFingerprintModule 运行指纹识别模块（多目标并发优化）
 func (sc *ScanController) runFingerprintModule(targets []string) ([]interfaces.HTTPResponse, error) {
 	// 模块启动提示
 	// 模块开始前空行，提升可读性
@@ -688,7 +688,7 @@ func (sc *ScanController) runFingerprintModule(targets []string) ([]interfaces.H
 	}
 	logger.Debugf("开始指纹识别，数量: %d", len(targets))
 
-	// [重要] 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
+	// 多目标优化：判断是否使用并发扫描（重构：简化判断逻辑）
 	if len(targets) > 1 {
 		return sc.runConcurrentFingerprint(targets)
 	}
@@ -701,7 +701,7 @@ func (sc *ScanController) runFingerprintModule(targets []string) ([]interfaces.H
 func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfaces.HTTPResponse, error) {
 	logger.Infof("并发指纹识别模式，数量: %d", len(targets))
 
-	// [重要] 设置批量扫描模式，确保统计更新正确
+	// 设置批量扫描模式，确保统计更新正确
 	originalBatchMode := sc.requestProcessor.IsBatchMode()
 	sc.requestProcessor.SetBatchMode(true)
 	defer sc.requestProcessor.SetBatchMode(originalBatchMode) // 恢复原始模式
@@ -771,7 +771,7 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 
 			results := sc.processSingleTargetFingerprintWithTimeout(ctx, targetURL)
 
-			// [重要] 更新已完成主机数统计
+			// 更新已完成主机数统计
 			if sc.statsDisplay.IsEnabled() {
 				sc.statsDisplay.IncrementCompletedHosts()
 				logger.Debugf("指纹识别完成目标 %s，更新已完成主机数", targetURL)
@@ -804,7 +804,7 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 		return allResults, fmt.Errorf("指纹识别超时")
 	}
 
-	// [重要] 主动探测path字段指纹（复用被动模式逻辑）
+	// 主动探测path字段指纹（复用被动模式逻辑）
 	sc.performPathProbingWithTimeout(ctx, targets)
 
 	return allResults, nil
@@ -812,7 +812,7 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 
 // runSequentialFingerprint 运行顺序指纹识别（保持原有逻辑）
 func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfaces.HTTPResponse, error) {
-	// [重要] 动态设置模块上下文为指纹识别，禁用processor进度条
+	// 动态设置模块上下文为指纹识别，禁用processor进度条
 	originalContext := sc.requestProcessor.GetModuleContext()
 	sc.requestProcessor.SetModuleContext("fingerprint")
 	defer sc.requestProcessor.SetModuleContext(originalContext) // 恢复原始上下文
@@ -824,7 +824,7 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 
 	var allResults []interfaces.HTTPResponse
 
-	// [重要] 初始化指纹识别进度跟踪器
+	// 初始化指纹识别进度跟踪器
 	pathRulesCount := 0
 	if sc.fingerprintEngine.HasPathRules() {
 		pathRulesCount = sc.fingerprintEngine.GetPathRulesCount()
@@ -845,12 +845,12 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 				continue
 			}
 
-			// [重要] 关键修复：使用带HTTP客户端的分析方法，支持icon()函数主动探测
+			// 关键修复：使用带HTTP客户端的分析方法，支持icon()函数主动探测
 			httpClient := sc.createHTTPClientAdapter()
 
 			matches := sc.fingerprintEngine.AnalyzeResponseWithClient(fpResponse, httpClient)
 
-			// [重要] 更新进度：基础指纹匹配完成
+			// 更新进度：基础指纹匹配完成
 			sc.progressTracker.UpdateProgress("指纹识别进行中")
 
 			// 转换为接口类型（用于报告生成，但指纹识别不需要Filter）
@@ -875,20 +875,20 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 			logger.Debugf("%s 指纹识别完成，匹配数量: %d", target, len(matches))
 		}
 
-		// [重要] 更新已完成主机数统计（单目标指纹识别）
+		// 更新已完成主机数统计（单目标指纹识别）
 		if sc.statsDisplay.IsEnabled() {
 			sc.statsDisplay.IncrementCompletedHosts()
 			logger.Debugf("单目标指纹识别完成目标 %s，更新已完成主机数", target)
 		}
 	}
 
-	// [重要] 主动探测path字段指纹（复用被动模式逻辑）
+	// 主动探测path字段指纹（复用被动模式逻辑）
 	sc.performPathProbing(targets)
 
 	return allResults, nil
 }
 
-// processSingleTargetFingerprint 处理单个目标的指纹识别（[重要] 多目标并发优化）
+// processSingleTargetFingerprint 处理单个目标的指纹识别（多目标并发优化）
 func (sc *ScanController) processSingleTargetFingerprint(target string) []interfaces.HTTPResponse {
 	logger.Debugf("开始处理指纹识别: %s", target)
 
@@ -911,7 +911,7 @@ func (sc *ScanController) processSingleTargetFingerprint(target string) []interf
 			continue
 		}
 
-		// [重要] 关键修复：使用带HTTP客户端的分析方法，支持icon()函数主动探测
+		// 关键修复：使用带HTTP客户端的分析方法，支持icon()函数主动探测
 		httpClient := sc.createHTTPClientAdapter()
 		matches := sc.fingerprintEngine.AnalyzeResponseWithClient(fpResponse, httpClient)
 
@@ -1000,7 +1000,7 @@ func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) 
 
 	// 检查目标文件是否已存在
 	if _, err := os.Stat(sc.args.Output); err == nil {
-		logger.Infof("目标文件已存在，将被覆盖: %s", sc.args.Output)
+		logger.Infof("Override Files: %s", sc.args.Output)
 	}
 
 	// 使用自定义报告生成器，直接指定输出路径
@@ -1009,7 +1009,7 @@ func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) 
 		return fmt.Errorf("报告生成失败: %v", err)
 	}
 
-	logger.Infof("Report: %s", reportPath)
+	logger.Infof("Report Output Success: %s", reportPath)
 	return nil
 }
 
@@ -1228,7 +1228,7 @@ func (sc *ScanController) convertToFingerprintResponse(resp *interfaces.HTTPResp
 		headers = make(map[string][]string)
 	}
 
-	// [重要] 关键修复：处理响应体解压缩和编码转换
+	// 关键修复：处理响应体解压缩和编码转换
 	processedBody := sc.processResponseBody(resp)
 
 	// 提取处理后的标题（使用解压缩和编码转换后的内容）
@@ -1258,10 +1258,10 @@ func (sc *ScanController) processResponseBody(resp *interfaces.HTTPResponse) str
 
 	rawBody := resp.ResponseBody
 
-	// [重要] 步骤1: 检查Content-Encoding并解压缩
+	// 步骤1: 检查Content-Encoding并解压缩
 	decompressedBody := sc.decompressResponseBody(rawBody, resp.ResponseHeaders)
 
-	// [重要] 步骤2: 字符编码检测和转换
+	// 步骤2: 字符编码检测和转换
 	convertedBody := sc.encodingDetector.DetectAndConvert(decompressedBody, resp.ContentType)
 
 	logger.Debugf("响应体处理: %s (原始: %d -> 解压: %d -> 转换: %d bytes)",
@@ -1362,7 +1362,7 @@ func (sc *ScanController) performPathProbing(targets []string) {
 			logger.Debugf("触发path字段主动探测: %s", hostKey)
 			sc.markHostAsProbed(hostKey)
 
-			// [重要] 修复：使用同步方式执行path探测，确保所有path规则都被处理
+			// 修复：使用同步方式执行path探测，确保所有path规则都被处理
 			sc.performSyncPathProbing(baseURL, httpClient)
 		} else {
 			logger.Debugf("主机已探测过，跳过path探测: %s", hostKey)
@@ -1432,12 +1432,12 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 	scheme := parsedURL.Scheme
 	host := parsedURL.Host
 
-	// [重要] 性能优化：并发遍历所有path规则进行探测（修复：添加超时和panic恢复）
+	// 性能优化：并发遍历所有path规则进行探测（修复：添加超时和panic恢复）
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 50) // [重要] 性能优化：提升path探测并发数
+	semaphore := make(chan struct{}, 50) // 性能优化：提升path探测并发数
 
 	for i, rule := range pathRules {
 		wg.Add(1)
@@ -1606,7 +1606,7 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 	body, statusCode, err := httpClient.MakeRequest(probeURL)
 	if err != nil {
 		logger.Debugf("主动探测请求失败: %s, 错误: %v", probeURL, err)
-		// [重要] 即使失败也要更新进度
+		// 即使失败也要更新进度
 		if sc.progressTracker != nil {
 			sc.progressTracker.UpdateProgress("指纹识别进行中")
 		}
@@ -1629,7 +1629,7 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 		Title:         sc.extractTitleFromHTML(body), // 复用现有的标题提取方法
 	}
 
-	// [重要] 性能优化：使用专用的单规则匹配，避免遍历所有525个规则
+	// 性能优化：使用专用的单规则匹配，避免遍历所有525个规则
 	match := sc.fingerprintEngine.MatchSpecificRule(rule, response, httpClient, baseURL)
 	if match != nil {
 		logger.Debugf("path探测发现匹配: %s -> %s", probeURL, rule.Name)
@@ -1643,7 +1643,7 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 			formatter.FormatFingerprintTag("主动探测"))
 	}
 
-	// [重要] 更新进度：path探测完成
+	// 更新进度：path探测完成
 	if sc.progressTracker != nil {
 		sc.progressTracker.UpdateProgress("指纹识别进行中")
 	}

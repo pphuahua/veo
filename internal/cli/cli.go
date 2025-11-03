@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -330,7 +331,7 @@ func getStringValue(a, b string) string {
 func showCustomHelp() {
 	prog := filepath.Base(os.Args[0])
 	fmt.Printf(`
-veo - 双模式安全扫描工具
+veo - 端口扫描/指纹识别/目录扫描
 
 用法:
   %[1]s -u <targets> [options]           # 主动扫描（默认）
@@ -378,8 +379,6 @@ veo - 双模式安全扫描工具
   %[1]s -u 1.1.1.1 -m port -p 1-65535 -sV --rate 10000
   %[1]s -f targets.txt -m finger,dirscan --stats
   %[1]s -u target.com --listen -lp 8080
-
-完整参数请参见 docs/CLI.md
 
 `, prog)
 }
@@ -757,13 +756,13 @@ func applyArgsToConfig(args *CLIArgs) {
 			// 1) 覆盖全局过滤配置（供 ResponseFilter 使用）
 			customFilterConfig = filter.DefaultFilterConfig()
 			customFilterConfig.ValidStatusCodes = statusCodes
-			logger.Infof("CLI参数覆盖：状态码过滤设置为 %v", statusCodes)
+			logger.Infof("状态码过滤设置为 %v", statusCodes)
 
 			// 2) 覆盖被动模式 Collector 的采集状态码白名单
 			collectorCfg := config.GetCollectorConfig()
 			if collectorCfg != nil {
 				collectorCfg.GenerationStatusCodes = statusCodes
-				logger.Infof("CLI参数覆盖：被动采集状态码白名单设置为 %v", statusCodes)
+				logger.Infof("被动采集状态码白名单设置为 %v", statusCodes)
 			}
 		}
 	}
@@ -780,38 +779,21 @@ func applyArgsToConfig(args *CLIArgs) {
 		filter.SetGlobalFilterConfig(customFilterConfig)
 	}
 
-	// 设置目标白名单（支持子域名匹配）
+	// 设置目标白名单
 	if len(args.Targets) > 0 {
 		hostConfig := config.GetHostsConfig()
-		// 🔧 修正：考虑代理服务器会使用extractHost去除端口号
-		// 当用户指定 -u 47.104.27.15:65 时，自动允许：
-		// 1. 47.104.27.15:65 (原始)
-		// 2. 47.104.27.15 (去除端口，用于代理过滤)
-		// 3. *.47.104.27.15 (子域名通配符)
-		allowList := make([]string, 0, len(args.Targets)*3)
-		for _, target := range args.Targets {
-			allowList = append(allowList, target) // 原始目标（可能包含端口）
-
-			// 如果目标包含端口，同时添加不含端口的版本
-			if host, _, err := net.SplitHostPort(target); err == nil {
-				allowList = append(allowList, host)      // 不含端口的主机名
-				allowList = append(allowList, "*."+host) // 子域名通配符
-			} else {
-				// 如果没有端口，添加子域名通配符
-				allowList = append(allowList, "*."+target)
-			}
-		}
+		allowList := buildHostAllowList(args.Targets)
 		hostConfig.Allow = allowList
-
-		logger.Debugf("主机白名单已设置: %v", allowList)
-		logger.Debugf("支持主域名和子域名匹配，例如: %s 和 *.%s", args.Targets[0], args.Targets[0])
+		if len(allowList) > 0 {
+			logger.Debugf("主机白名单已设置: %v", allowList)
+		}
 	}
 
 	// 应用自定义字典路径
 	if args.Wordlist != "" {
 		wordlists := parseWordlistPaths(args.Wordlist)
 		dictionary.SetWordlistPaths(wordlists)
-		logger.Infof("使用自定义字典: %s", strings.Join(wordlists, ","))
+		logger.Infof("Use Dicts: %s", strings.Join(wordlists, ","))
 	} else {
 		dictionary.SetWordlistPaths(nil)
 	}
@@ -1311,4 +1293,77 @@ func parseWordlistPaths(raw string) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func buildHostAllowList(targets []string) []string {
+	allow := make([]string, 0, len(targets)*2)
+	seen := make(map[string]struct{})
+	for _, raw := range targets {
+		host, port, wildcard := normalizeTargetHost(raw)
+		if host == "" {
+			continue
+		}
+		add := func(value string) {
+			value = strings.TrimSpace(strings.ToLower(value))
+			if value == "" {
+				return
+			}
+			if _, ok := seen[value]; ok {
+				return
+			}
+			allow = append(allow, value)
+			seen[value] = struct{}{}
+		}
+		add(host)
+		if port != "" {
+			add(host + ":" + port)
+		}
+		if wildcard {
+			// 通配符目标仅保留用户指定的形式
+			continue
+		}
+	}
+	return allow
+}
+
+func normalizeTargetHost(raw string) (host string, port string, wildcard bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", "", false
+	}
+	candidate := s
+	if strings.Contains(s, "://") {
+		if parsed, err := url.Parse(s); err == nil {
+			candidate = parsed.Host
+		}
+	}
+	if idx := strings.Index(candidate, "/"); idx != -1 {
+		candidate = candidate[:idx]
+	}
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return "", "", false
+	}
+	if at := strings.LastIndex(candidate, "@"); at != -1 {
+		candidate = candidate[at+1:]
+	}
+	port = ""
+	hostPart := candidate
+	if strings.HasPrefix(hostPart, "[") {
+		if h, p, err := net.SplitHostPort(hostPart); err == nil {
+			hostPart, port = h, p
+		} else {
+			hostPart = strings.Trim(hostPart, "[]")
+		}
+	} else {
+		if h, p, err := net.SplitHostPort(hostPart); err == nil {
+			hostPart, port = h, p
+		}
+	}
+	hostPart = strings.TrimSpace(hostPart)
+	if hostPart == "" {
+		return "", "", false
+	}
+	lower := strings.ToLower(hostPart)
+	return lower, port, strings.HasPrefix(lower, "*.")
 }

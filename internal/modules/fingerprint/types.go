@@ -20,7 +20,7 @@ type FingerprintRule struct {
 	DSL       []string `yaml:"dsl"`                 // DSL表达式列表
 	Condition string   `yaml:"condition,omitempty"` // 条件逻辑 (and/or，默认or)
 	Category  string   `yaml:"category,omitempty"`  // 分类（可选）
-	Path      string   `yaml:"path,omitempty"`      // [重要] 新增：主动探测路径
+	Path      string   `yaml:"path,omitempty"`      // 新增：主动探测路径
 }
 
 // FingerprintMatch 指纹匹配结果
@@ -71,8 +71,8 @@ type Engine struct {
 	staticContentTypes       []string
 	staticFileFilterEnabled  bool
 	contentTypeFilterEnabled bool
-    showSnippet              bool
-    loadedSummaries          []string // 已加载规则文件摘要，例如 finger.yaml:754
+	showSnippet              bool
+	loadedSummaries          []string // 已加载规则文件摘要，例如 finger.yaml:754
 }
 
 // Statistics 统计信息

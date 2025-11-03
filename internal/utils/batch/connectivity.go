@@ -1,15 +1,16 @@
 package batch
 
 import (
-	"veo/internal/core/config"
-	"veo/internal/core/logger"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+	"veo/internal/core/config"
+	"veo/internal/core/logger"
 )
 
 // ConnectivityChecker 连通性检测器
@@ -56,7 +57,7 @@ func (cc *ConnectivityChecker) isReachableWithRedirect(targetURL string, maxRedi
 	timeout := cc.getTimeout()
 	startTime := time.Now()
 
-	logger.Debugf("🚀 发送HTTP请求: %s (超时: %v)", targetURL, timeout)
+	logger.Debugf("发送HTTP请求: %s (超时: %v)", targetURL, timeout)
 
 	// 创建HTTP客户端
 	client := &http.Client{
@@ -95,7 +96,7 @@ func (cc *ConnectivityChecker) isReachableWithRedirect(targetURL string, maxRedi
 	return true
 }
 
-// getTimeout 从配置中获取超时时间（[重要] 连通性优化）
+// getTimeout 从配置中获取超时时间（连通性优化）
 func (cc *ConnectivityChecker) getTimeout() time.Duration {
 	// 从配置中读取超时时间
 	if cc.config != nil && cc.config.Addon.Request.Timeout > 0 {
@@ -104,15 +105,15 @@ func (cc *ConnectivityChecker) getTimeout() time.Duration {
 		return timeout
 	}
 
-	// [重要] 连通性优化：默认超时时间5秒，快速丢弃无效目标
+	// 连通性优化：默认超时时间5秒，快速丢弃无效目标
 	defaultTimeout := 5 * time.Second
 	logger.Debugf("使用默认连通性超时时间: %v", defaultTimeout)
 	return defaultTimeout
 }
 
-// BatchCheck 批量检测目标连通性（[重要] 连通性并发优化：智能选择并发或顺序检测）
+// BatchCheck 批量检测目标连通性（连通性并发优化：智能选择并发或顺序检测）
 func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
-	// [重要] 连通性并发优化：根据目标数量决定是否使用并发检测
+	// 连通性并发优化：根据目标数量决定是否使用并发检测
 	// 判断是否启用并发检测（重构：简化判断逻辑）
 	if len(targets) >= 3 {
 		return cc.BatchCheckConcurrent(targets)
@@ -188,7 +189,7 @@ func (cc *ConnectivityChecker) ValidateAndNormalize(targets []string) ([]string,
 // 工作池实现
 // ===========================================
 
-// ConnectivityWorkerPool 连通性检测工作池（[重要] 连通性并发优化）
+// ConnectivityWorkerPool 连通性检测工作池（连通性并发优化）
 type ConnectivityWorkerPool struct {
 	workerCount int
 	taskChan    chan ConnectivityTask
@@ -330,7 +331,7 @@ func (cw *ConnectivityWorker) run(wg *sync.WaitGroup) {
 	}
 }
 
-// calculateOptimalConcurrency 计算最优并发数（[重要] 连通性优化）
+// calculateOptimalConcurrency 计算最优并发数（连通性优化）
 func (cc *ConnectivityChecker) calculateOptimalConcurrency(targetCount int, configConcurrency int) int {
 	// 使用配置的并发数作为基础
 	baseConcurrency := configConcurrency
@@ -356,24 +357,22 @@ func min(a, b int) int {
 	return b
 }
 
-// BatchCheckConcurrent 并发批量检测目标连通性（[重要] 连通性并发优化）
+// BatchCheckConcurrent 并发批量检测目标连通性（连通性并发优化）
 func (cc *ConnectivityChecker) BatchCheckConcurrent(targets []string) []string {
-	// 使用默认配置
-	maxConnectivityConcurrent := 20 // 默认最大连通性检测并发数
-	concurrency := cc.calculateOptimalConcurrency(len(targets), maxConnectivityConcurrent)
+	concurrency := cc.dynamicConcurrency(len(targets))
 
 	logger.Debugf("启用并发连通性检测，目标数量: %d，并发数: %d", len(targets), concurrency)
 
-	// 创建并启动工作池
 	workerPool := NewConnectivityWorkerPool(concurrency, cc)
 	workerPool.Start()
 	defer workerPool.Stop()
 
-	// 初始化统计和进度显示
 	stats := &ConnectivityStats{
 		TotalCount: int64(len(targets)),
 		StartTime:  time.Now(),
 	}
+
+	progressDone := cc.startProgressDisplay(stats)
 
 	// 提交所有任务
 	parser := NewTargetParser()
@@ -410,28 +409,76 @@ func (cc *ConnectivityChecker) BatchCheckConcurrent(targets []string) []string {
 				logger.Debugf("跳过不可连通的目标: %s", result.Target)
 			}
 
-		case <-time.After(30 * time.Second): // 超时保护
+		case <-time.After(30 * time.Second):
 			logger.Warnf("连通性检测超时，已处理: %d/%d", processedCount, len(targets))
-			break
+			goto finish
 		}
 	}
 
-	// [重要] 用户体验优化：详细的完成统计日志
+finish:
+	close(progressDone)
+
 	logger.Debugf("\r有效目标: %d，丢弃目标: %d，耗时: %v",
 		len(reachableTargets), len(droppedTargets), time.Since(stats.StartTime).Round(time.Second))
 
 	return reachableTargets
 }
 
+func (cc *ConnectivityChecker) dynamicConcurrency(targetCount int) int {
+	cfg := config.GetConfig()
+	base := 15
+	if cfg != nil && cfg.Module.Dirscan {
+		base = 20
+	}
+	if base < 1 {
+		base = 1
+	}
+
+	if targetCount <= 1 {
+		return 1
+	}
+	if targetCount <= 4 {
+		if targetCount < base {
+			return targetCount
+		}
+		return base
+	}
+
+	maxPossible := runtime.NumCPU() * 4
+	if maxPossible < 1 {
+		maxPossible = 1
+	}
+
+	if base > maxPossible {
+		base = maxPossible
+	}
+
+	if targetCount < base {
+		return targetCount
+	}
+	if targetCount < base*2 {
+		return base
+	}
+
+	limit := base * 2
+	if limit > maxPossible {
+		limit = maxPossible
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	return limit
+}
+
 // ===========================================
 // 进度显示
 // ===========================================
 
-// [重要] 日志修复：连通性检测进度显示同步锁
+// 日志修复：连通性检测进度显示同步锁
 var connectivityProgressMutex sync.Mutex
 var lastConnectivityProgress string
 
-// startProgressDisplay 启动连通性进度显示（[重要] 连通性并发优化）
+// startProgressDisplay 启动连通性进度显示（连通性并发优化）
 func (cc *ConnectivityChecker) startProgressDisplay(stats *ConnectivityStats) chan struct{} {
 	progressDone := make(chan struct{})
 
@@ -453,7 +500,7 @@ func (cc *ConnectivityChecker) startProgressDisplay(stats *ConnectivityStats) ch
 	return progressDone
 }
 
-// showConnectivityProgress 显示连通性检测进度（[重要] 连通性并发优化 + 日志修复）
+// showConnectivityProgress 显示连通性检测进度（连通性并发优化 + 日志修复）
 func (cc *ConnectivityChecker) showConnectivityProgress(stats *ConnectivityStats) {
 	current := atomic.LoadInt64(&stats.ProcessedCount)
 	if current == 0 {
@@ -471,17 +518,17 @@ func (cc *ConnectivityChecker) showConnectivityProgress(stats *ConnectivityStats
 		remaining := time.Duration(total-current) * avgTimePerTarget
 		eta = fmt.Sprintf("ETA: %v", remaining.Round(time.Second))
 	} else {
-		eta = "ETA: 计算中..."
+		eta = "ETA..."
 	}
 
 	// 生成进度条（复用RequestProcessor的进度条生成逻辑）
 	progressBar := cc.generateConnectivityProgressBar(percentage)
 
 	// 日志修复：构建进度信息并避免重复显示
-	progressInfo := fmt.Sprintf("连通性检测: %d/%d (%.1f%%) %s 耗时: %v %s\r",
+	progressInfo := fmt.Sprintf("Alive Checking: %d/%d (%.1f%%) %s Time: %v %s\r",
 		current, total, percentage, progressBar, elapsed.Round(time.Second), eta)
 
-	// [重要] 日志修复：使用同步锁防止重复显示相同的进度信息
+	// 日志修复：使用同步锁防止重复显示相同的进度信息
 	connectivityProgressMutex.Lock()
 	if progressInfo != lastConnectivityProgress {
 		fmt.Printf("\r%s", progressInfo)
@@ -490,7 +537,7 @@ func (cc *ConnectivityChecker) showConnectivityProgress(stats *ConnectivityStats
 	connectivityProgressMutex.Unlock()
 }
 
-// generateConnectivityProgressBar 生成连通性进度条（[重要] 连通性并发优化）
+// generateConnectivityProgressBar 生成连通性进度条（连通性并发优化）
 func (cc *ConnectivityChecker) generateConnectivityProgressBar(percentage float64) string {
 	// 复用RequestProcessor的进度条生成逻辑
 	const barLength = 20
@@ -511,12 +558,12 @@ func (cc *ConnectivityChecker) generateConnectivityProgressBar(percentage float6
 	return bar
 }
 
-// showFinalConnectivityProgress 显示最终连通性进度（[重要] 连通性并发优化 + 日志修复）
+// showFinalConnectivityProgress 显示最终连通性进度（连通性并发优化 + 日志修复）
 func (cc *ConnectivityChecker) showFinalConnectivityProgress(stats *ConnectivityStats) {
 	current := atomic.LoadInt64(&stats.ProcessedCount)
 	total := stats.TotalCount
 	percentage := float64(current) / float64(total) * 100
 
 	// 日志修复：清除当前行并显示最终进度
-	fmt.Printf("\r连通性检测: %d/%d (%.1f%%) 完成\n", current, total, percentage)
+	fmt.Printf("\rAlive Checking: %d/%d (%.1f%%) Done\n", current, total, percentage)
 }

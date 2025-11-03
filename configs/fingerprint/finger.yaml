@@ -3377,10 +3377,15 @@ H3C-iMC智能管理中心:
 ureport:
   path: "/ureport/designer"
   dsl:
-    - "contains(body, 'ureport','ureport-asserts')"
+    - "contains_all(body, 'ureport','ureport-asserts')"
     - "contains(body, 'window._server=\"/ureport\"')"
 
 群杰印章物联网管理平台:
   path: "/ureport/designer"
   dsl:
     - "icon('/favicon.ico', '8d51bc407f98aa7b6919dda75b6da5f4')"
+
+维保保:
+  dsl:
+    - "title('维保保')"
+    - "contains(body, 'upload/login/logo.png','user/goChangePasswordNew.do','plugins/wbb/RSA.js')"

@@ -81,7 +81,7 @@ func NewTitleExtractor() *TitleExtractor {
 	return &TitleExtractor{}
 }
 
-// ExtractTitle 从HTML内容中提取标题（[重要] 修复：添加严格边界检查）
+// ExtractTitle 从HTML内容中提取标题（修复：添加严格边界检查）
 func (e *TitleExtractor) ExtractTitle(body string) string {
 	if body == "" {
 		return "空标题"
@@ -92,7 +92,7 @@ func (e *TitleExtractor) ExtractTitle(body string) string {
 	re := regexp.MustCompile(titleRegex)
 	matches := re.FindStringSubmatch(body)
 
-	// [重要] 修复：严格的边界检查，防止index out of range panic
+	// 修复：严格的边界检查，防止index out of range panic
 	if len(matches) >= 2 {
 		// 额外检查：确保matches[1]确实存在且可访问
 		if len(matches) > 1 && matches[1] != "" {

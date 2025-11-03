@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"veo/internal/core/logger"
@@ -63,7 +65,7 @@ type RequestConfig struct {
 	Threads             int      `yaml:"threads"` // 统一并发控制，对所有模块生效
 	KeepAliveSeconds    int      `yaml:"keep_alive_seconds"`
 	RandomUA            *bool    `yaml:"randomUA"`               // 保留，processor包中被使用
-	MaxResponseBodySize int      `yaml:"max_response_body_size"` // [重要] 内存优化：响应体大小限制
+	MaxResponseBodySize int      `yaml:"max_response_body_size"` // 内存优化：响应体大小限制
 }
 
 // ProxyConfig 代理配置
@@ -204,26 +206,66 @@ func GetProxyConfig() *ProxyConfig {
 // IsHostAllowed 检查主机是否被允许
 func IsHostAllowed(host string) bool {
 	config := GetHostsConfig()
+	hostLower, hostWithoutPort := normalizeHostKey(host)
 
 	// 检查拒绝列表
 	for _, reject := range config.Reject {
-		if matchPattern(host, reject) {
+		pattern := strings.ToLower(strings.TrimSpace(reject))
+		if pattern == "" {
+			continue
+		}
+		if matchPattern(hostLower, pattern) || (hostWithoutPort != hostLower && matchPattern(hostWithoutPort, pattern)) {
 			return false
 		}
 	}
 
 	// 检查允许列表
 	if len(config.Allow) == 0 {
-		return true // 如果没有允许列表，默认允许所有
+		return true
 	}
 
 	for _, allow := range config.Allow {
-		if matchPattern(host, allow) {
+		pattern := strings.ToLower(strings.TrimSpace(allow))
+		if pattern == "" {
+			continue
+		}
+		if matchPattern(hostLower, pattern) || (hostWithoutPort != hostLower && matchPattern(hostWithoutPort, pattern)) {
 			return true
 		}
 	}
 
 	return false
+}
+
+func normalizeHostKey(host string) (string, string) {
+	hostLower := strings.ToLower(strings.TrimSpace(host))
+	if hostLower == "" {
+		return "", ""
+	}
+	hostWithoutPort := hostLower
+
+	if strings.HasPrefix(hostLower, "[") {
+		if h, _, err := net.SplitHostPort(hostLower); err == nil {
+			hostWithoutPort = strings.ToLower(strings.TrimSpace(h))
+		} else if strings.HasSuffix(hostLower, "]") {
+			hostWithoutPort = strings.TrimSpace(hostLower[1 : len(hostLower)-1])
+		}
+	} else {
+		if h, _, err := net.SplitHostPort(hostLower); err == nil {
+			hostWithoutPort = strings.ToLower(strings.TrimSpace(h))
+		} else {
+			if idx := strings.LastIndex(hostLower, ":"); idx > -1 && idx < len(hostLower)-1 {
+				if _, err := strconv.Atoi(hostLower[idx+1:]); err == nil {
+					hostWithoutPort = strings.TrimSpace(hostLower[:idx])
+				}
+			}
+		}
+	}
+
+	if hostWithoutPort == "" {
+		hostWithoutPort = hostLower
+	}
+	return hostLower, hostWithoutPort
 }
 
 // matchPattern 简单的模式匹配（支持通配符*）

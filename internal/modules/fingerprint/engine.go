@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -16,7 +17,6 @@ import (
 	"veo/internal/core/logger"
 	"veo/internal/utils/formatter"
 	"veo/internal/utils/shared"
-    "regexp"
 
 	"gopkg.in/yaml.v3"
 )
@@ -148,23 +148,23 @@ func (e *Engine) LoadRules(rulesPath string) error {
 		yamlFiles = append(yamlFiles, rulesPath)
 	}
 
-    // 加载所有YAML文件
-    e.loadedSummaries = nil
-    totalRulesLoaded := 0
-    for _, yamlFile := range yamlFiles {
-        count, err := e.loadSingleYAMLFile(yamlFile)
-        if err != nil {
-            logger.Warnf("加载指纹库文件失败: %s, 错误: %v", filepath.Base(yamlFile), err)
-            continue
-        }
-        summary := fmt.Sprintf("%s:%d", filepath.Base(yamlFile), count)
-        e.loadedSummaries = append(e.loadedSummaries, summary)
-        // 降级为调试日志，避免在模块启动前重复打印
-        logger.Debugf("Loaded FingerPrint Rules: %s", summary)
-        totalRulesLoaded += count
-    }
-    e.stats.RulesLoaded = totalRulesLoaded
-    return nil
+	// 加载所有YAML文件
+	e.loadedSummaries = nil
+	totalRulesLoaded := 0
+	for _, yamlFile := range yamlFiles {
+		count, err := e.loadSingleYAMLFile(yamlFile)
+		if err != nil {
+			logger.Warnf("加载指纹库文件失败: %s, 错误: %v", filepath.Base(yamlFile), err)
+			continue
+		}
+		summary := fmt.Sprintf("%s:%d", filepath.Base(yamlFile), count)
+		e.loadedSummaries = append(e.loadedSummaries, summary)
+		// 降级为调试日志，避免在模块启动前重复打印
+		logger.Debugf("Loaded FingerPrint Rules: %s", summary)
+		totalRulesLoaded += count
+	}
+	e.stats.RulesLoaded = totalRulesLoaded
+	return nil
 }
 
 // GetLoadedSummaryString 返回已加载规则文件的摘要字符串
@@ -172,9 +172,9 @@ func (e *Engine) LoadRules(rulesPath string) error {
 // 参数：无
 // 返回：摘要字符串，若无则返回空字符串
 func (e *Engine) GetLoadedSummaryString() string {
-    e.mu.RLock()
-    defer e.mu.RUnlock()
-    return strings.Join(e.loadedSummaries, " ")
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return strings.Join(e.loadedSummaries, " ")
 }
 
 // loadSingleYAMLFile 加载单个YAML文件
@@ -234,7 +234,7 @@ func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient in
 	// 更新统计
 	atomic.AddInt64(&e.stats.TotalRequests, 1)
 
-	// [重要] 性能优化：移除信号量控制，统一在RequestProcessor层管理并发
+	// 性能优化：移除信号量控制，统一在RequestProcessor层管理并发
 	// 指纹匹配本身是CPU密集型操作，不需要额外的并发限制
 	// HTTP请求的并发控制已在RequestProcessor层实现
 
@@ -281,104 +281,108 @@ func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient in
 		e.outputFingerprintMatches(matches, response, "")
 	}
 
-    // [增强] 支持基于HTML的客户端重定向（meta refresh / JavaScript location）
-    // 适用场景：响应返回200，但通过 <meta refresh> 或 <script>location=...</script> 指示跳转
-    // 仅在存在HTTP客户端时尝试一次重定向抓取，避免递归/循环
-    if httpClient != nil {
-        if redirectURL := e.detectClientRedirectURL(response); redirectURL != "" {
-            // 将相对地址解析为绝对URL
-            absURL := e.resolveRedirectURL(response.URL, redirectURL)
-            if absURL != "" {
-                if client, ok := httpClient.(interface{ MakeRequest(string) (string, int, error) }); ok {
-                    body, statusCode, err := client.MakeRequest(absURL)
-                    if err == nil && body != "" {
-                        // 构造最小可用的HTTPResponse用于再次匹配
-                        // 说明：此路径无法获取响应头部与Content-Type，但对大多数基于Body/Title的指纹匹配已足够
-                        titleExtractor := shared.NewTitleExtractor()
-                        title := titleExtractor.ExtractTitle(body)
-                        redirected := &HTTPResponse{
-                            URL:           absURL,
-                            Method:        "GET",
-                            StatusCode:    statusCode,
-                            Headers:       map[string][]string{},
-                            Body:          body,
-                            ContentType:   "",
-                            ContentLength: int64(len(body)),
-                            Server:        "",
-                            Title:         title,
-                        }
-                        // 静默匹配并合并输出
-                        rMatches := e.AnalyzeResponseWithClientSilent(redirected, httpClient)
-                        if len(rMatches) > 0 {
-                            e.outputFingerprintMatches(rMatches, redirected, "")
-                            matches = append(matches, rMatches...)
-                        }
-                    } else if err != nil {
-                        logger.Debugf("客户端重定向抓取失败: %s, 错误: %v", absURL, err)
-                    }
-                }
-            }
-        }
-    }
+	// [增强] 支持基于HTML的客户端重定向（meta refresh / JavaScript location）
+	// 适用场景：响应返回200，但通过 <meta refresh> 或 <script>location=...</script> 指示跳转
+	// 仅在存在HTTP客户端时尝试一次重定向抓取，避免递归/循环
+	if httpClient != nil {
+		if redirectURL := e.detectClientRedirectURL(response); redirectURL != "" {
+			// 将相对地址解析为绝对URL
+			absURL := e.resolveRedirectURL(response.URL, redirectURL)
+			if absURL != "" {
+				if client, ok := httpClient.(interface {
+					MakeRequest(string) (string, int, error)
+				}); ok {
+					body, statusCode, err := client.MakeRequest(absURL)
+					if err == nil && body != "" {
+						// 构造最小可用的HTTPResponse用于再次匹配
+						// 说明：此路径无法获取响应头部与Content-Type，但对大多数基于Body/Title的指纹匹配已足够
+						titleExtractor := shared.NewTitleExtractor()
+						title := titleExtractor.ExtractTitle(body)
+						redirected := &HTTPResponse{
+							URL:           absURL,
+							Method:        "GET",
+							StatusCode:    statusCode,
+							Headers:       map[string][]string{},
+							Body:          body,
+							ContentType:   "",
+							ContentLength: int64(len(body)),
+							Server:        "",
+							Title:         title,
+						}
+						// 静默匹配并合并输出
+						rMatches := e.AnalyzeResponseWithClientSilent(redirected, httpClient)
+						if len(rMatches) > 0 {
+							e.outputFingerprintMatches(rMatches, redirected, "")
+							matches = append(matches, rMatches...)
+						}
+					} else if err != nil {
+						logger.Debugf("客户端重定向抓取失败: %s, 错误: %v", absURL, err)
+					}
+				}
+			}
+		}
+	}
 
-    return matches
+	return matches
 }
 
 // detectClientRedirectURL 从HTML响应体中检测客户端重定向URL（支持meta refresh与多种JS写法）
 // 参数：
 //   - response: 原始HTTP响应
+//
 // 返回：
 //   - string: 若检测到重定向，返回目标URL（可能为相对路径）；否则返回空字符串
 func (e *Engine) detectClientRedirectURL(response *HTTPResponse) string {
-    if response == nil || response.Body == "" {
-        return ""
-    }
-    body := response.Body
-    // 1) <meta http-equiv="refresh" content="0;url=/path">（大小写与空白不敏感）
-    // 提取content中的url参数
-    metaRe := regexp.MustCompile(`(?is)<meta[^>]*http-equiv\s*=\s*['\"]?refresh['\"]?[^>]*content\s*=\s*['\"][^'\"]*url\s*=\s*([^'\">\s]+)`)
-    if m := metaRe.FindStringSubmatch(body); len(m) >= 2 {
-        return strings.TrimSpace(m[1])
-    }
-    // 2) JavaScript 形式：location='...'; location.href="..."; window.location=...; top.location=...
-    jsPatterns := []string{
-        `(?is)location\s*=\s*['\"]([^'\"]+)['\"]`,
-        `(?is)location\.href\s*=\s*['\"]([^'\"]+)['\"]`,
-        `(?is)window\.location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`,
-        `(?is)top\.location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`,
-    }
-    for _, pat := range jsPatterns {
-        re := regexp.MustCompile(pat)
-        if m := re.FindStringSubmatch(body); len(m) >= 2 {
-            return strings.TrimSpace(m[1])
-        }
-    }
-    return ""
+	if response == nil || response.Body == "" {
+		return ""
+	}
+	body := response.Body
+	// 1) <meta http-equiv="refresh" content="0;url=/path">（大小写与空白不敏感）
+	// 提取content中的url参数
+	metaRe := regexp.MustCompile(`(?is)<meta[^>]*http-equiv\s*=\s*['\"]?refresh['\"]?[^>]*content\s*=\s*['\"][^'\"]*url\s*=\s*([^'\">\s]+)`)
+	if m := metaRe.FindStringSubmatch(body); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+	// 2) JavaScript 形式：location='...'; location.href="..."; window.location=...; top.location=...
+	jsPatterns := []string{
+		`(?is)location\s*=\s*['\"]([^'\"]+)['\"]`,
+		`(?is)location\.href\s*=\s*['\"]([^'\"]+)['\"]`,
+		`(?is)window\.location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`,
+		`(?is)top\.location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`,
+	}
+	for _, pat := range jsPatterns {
+		re := regexp.MustCompile(pat)
+		if m := re.FindStringSubmatch(body); len(m) >= 2 {
+			return strings.TrimSpace(m[1])
+		}
+	}
+	return ""
 }
 
 // resolveRedirectURL 解析相对跳转地址为绝对URL
 // 参数：
 //   - baseRaw: 原始响应的URL
 //   - ref: 重定向目标（可能为相对/协议相对/绝对）
+//
 // 返回：
 //   - string: 解析得到的绝对URL，解析失败时返回空字符串
 func (e *Engine) resolveRedirectURL(baseRaw, ref string) string {
-    if strings.TrimSpace(ref) == "" {
-        return ""
-    }
-    base, err := url.Parse(baseRaw)
-    if err != nil {
-        return ""
-    }
-    // 处理协议相对URL（//host/path）
-    if strings.HasPrefix(ref, "//") {
-        ref = base.Scheme + ":" + ref
-    }
-    // 使用URL解析与合并
-    if u, err := url.Parse(ref); err == nil {
-        return base.ResolveReference(u).String()
-    }
-    return ""
+	if strings.TrimSpace(ref) == "" {
+		return ""
+	}
+	base, err := url.Parse(baseRaw)
+	if err != nil {
+		return ""
+	}
+	// 处理协议相对URL（//host/path）
+	if strings.HasPrefix(ref, "//") {
+		ref = base.Scheme + ":" + ref
+	}
+	// 使用URL解析与合并
+	if u, err := url.Parse(ref); err == nil {
+		return base.ResolveReference(u).String()
+	}
+	return ""
 }
 
 // AnalyzeResponseWithClientSilent 分析响应包并进行指纹识别（静默版本，不自动输出结果）
@@ -666,45 +670,11 @@ func (e *Engine) GetStats() *Statistics {
 	return stats
 }
 
-// ClearMatches 清空匹配结果
-func (e *Engine) ClearMatches() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.matches = make([]*FingerprintMatch, 0)
-
-	// 同时清空输出缓存
-	e.ClearOutputCache()
-
-	logger.Info("已清空指纹匹配结果和输出缓存")
-}
-
 // GetRulesCount 获取加载的规则数量
 func (e *Engine) GetRulesCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.rules)
-}
-
-// PrintStats 打印统计信息
-func (e *Engine) PrintStats() {
-	stats := e.GetStats()
-	uptime := time.Since(stats.StartTime)
-
-	logger.Info("指纹识别统计")
-	logger.Infof("运行时间: %v", uptime)
-	logger.Infof("加载规则: %d 个", stats.RulesLoaded)
-	logger.Infof("总请求数: %d", stats.TotalRequests)
-	logger.Infof("匹配请求: %d", stats.MatchedRequests)
-	logger.Infof("过滤请求: %d", stats.FilteredRequests)
-
-	if stats.TotalRequests > 0 {
-		matchRate := float64(stats.MatchedRequests) / float64(stats.TotalRequests) * 100
-		logger.Infof("匹配率: %.1f%%", matchRate)
-	}
-
-	if !stats.LastMatchTime.IsZero() {
-		logger.Infof("最后匹配: %v", stats.LastMatchTime.Format("2006-01-02 15:04:05"))
-	}
 }
 
 // ===========================================
@@ -732,28 +702,6 @@ func getDefaultConfig() *EngineConfig {
 // ===========================================
 // 缓存和去重相关方法
 // ===========================================
-
-// hasOutputFingerprint 检查是否已输出指纹
-func (e *Engine) hasOutputFingerprint(cacheKey string) bool {
-	e.outputMutex.RLock()
-	defer e.outputMutex.RUnlock()
-	return e.outputCache[cacheKey]
-}
-
-// markAsOutputted 标记为已输出
-func (e *Engine) markAsOutputted(cacheKey string) {
-	e.outputMutex.Lock()
-	defer e.outputMutex.Unlock()
-	e.outputCache[cacheKey] = true
-}
-
-// ClearOutputCache 清空输出缓存
-func (e *Engine) ClearOutputCache() {
-	e.outputMutex.Lock()
-	defer e.outputMutex.Unlock()
-	e.outputCache = make(map[string]bool)
-	logger.Info("已清空指纹输出缓存")
-}
 
 // generateFingerprintCacheKey 生成细粒度缓存键（域名+端口+路径+指纹组合）
 // 优化版本：减少内存分配，使用strings.Builder提高性能
@@ -944,17 +892,17 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 				}
 				snippetLines = append(snippetLines, highlighted)
 			}
-                if len(snippetLines) > 0 {
-                    logMsg.WriteString("\n")
-                    for idx, snippetLine := range snippetLines {
-                        if idx > 0 {
-                            logMsg.WriteString("\n")
-                        }
-                        logMsg.WriteString("  ")
-                        logMsg.WriteString(formatter.FormatSnippetArrow())
-                        logMsg.WriteString(snippetLine)
-                    }
-                }
+			if len(snippetLines) > 0 {
+				logMsg.WriteString("\n")
+				for idx, snippetLine := range snippetLines {
+					if idx > 0 {
+						logMsg.WriteString("\n")
+					}
+					logMsg.WriteString("  ")
+					logMsg.WriteString(formatter.FormatSnippetArrow())
+					logMsg.WriteString(snippetLine)
+				}
+			}
 		}
 
 		logger.Info(logMsg.String())

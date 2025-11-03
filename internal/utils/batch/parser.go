@@ -67,7 +67,7 @@ func (tp *TargetParser) NormalizeURL(target string) []string {
 	host, port, err := tp.parseHostPort(target)
 	if err != nil {
 		logger.Debugf("解析主机端口失败: %v，同时尝试HTTP和HTTPS协议", err)
-		// [重要] 连通性修复：解析失败时同时尝试HTTP和HTTPS协议
+		// 连通性修复：解析失败时同时尝试HTTP和HTTPS协议
 		return []string{"http://" + target, "https://" + target}
 	}
 
@@ -77,7 +77,7 @@ func (tp *TargetParser) NormalizeURL(target string) []string {
 	var urls []string
 	for _, protocol := range protocols {
 		if port == 0 {
-			// [重要] 连通性修复：没有指定端口时，使用协议默认端口
+			// 连通性修复：没有指定端口时，使用协议默认端口
 			urls = append(urls, fmt.Sprintf("%s://%s", protocol, host))
 		} else if port == 80 && protocol == "http" {
 			// 默认HTTP端口，不显示端口号

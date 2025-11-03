@@ -12,7 +12,7 @@ import (
 	processor "veo/internal/utils/processor"
 )
 
-// TargetScheduler 目标调度器（[重要] 多目标并发优化）
+// TargetScheduler 目标调度器（多目标并发优化）
 type TargetScheduler struct {
 	targets                []string
 	maxTargetWorkers       int
@@ -179,7 +179,7 @@ func (ts *TargetScheduler) processTargetWithTimeout(ctx context.Context, index i
 
 	responses := worker.executeRequestsWithTimeout(ctx, scanURLs)
 
-	// [重要] 更新已完成主机数统计（每个目标完成时调用一次）
+	// 更新已完成主机数统计（每个目标完成时调用一次）
 	if ts.baseRequestProcessor != nil {
 		statsUpdater := ts.baseRequestProcessor.GetStatsUpdater()
 		if statsUpdater != nil {
@@ -259,7 +259,7 @@ func (ts *TargetScheduler) createTargetWorker(id int, target string) *TargetWork
 	// 创建新的请求处理器
 	requestProcessor := processor.NewRequestProcessor(requestConfig)
 
-	// [重要] 如果有基础请求处理器，复制其统计更新器
+	// 如果有基础请求处理器，复制其统计更新器
 	if ts.baseRequestProcessor != nil {
 		// 获取基础请求处理器的统计更新器并设置到新处理器
 		// 注意：这里需要添加一个方法来获取统计更新器

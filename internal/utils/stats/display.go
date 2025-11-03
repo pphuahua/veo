@@ -1,11 +1,11 @@
 package stats
 
 import (
-	"veo/internal/core/logger"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+	"veo/internal/core/logger"
 )
 
 // ScanStats 扫描统计信息
@@ -205,7 +205,7 @@ func (sd *StatsDisplay) ShowFinalStats() {
 	completedReqs := atomic.LoadInt64(&sd.stats.CompletedReqs)
 	timeoutCount := atomic.LoadInt64(&sd.stats.TimeoutCount)
 
-	// [重要] 修复已完成主机数统计错误：确保不超过总主机数
+	// 修复已完成主机数统计错误：确保不超过总主机数
 	if completedHosts > totalHosts {
 		completedHosts = totalHosts
 		logger.Warnf("修正已完成主机数统计错误: %d -> %d", atomic.LoadInt64(&sd.stats.CompletedHosts), completedHosts)

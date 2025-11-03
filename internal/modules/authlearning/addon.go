@@ -73,7 +73,7 @@ func (ala *AuthLearningAddon) Requestheaders(f *proxy.Flow) {
 		// 将学习到的Authorization头部应用到全局配置
 		ala.applyLearnedAuthToGlobalConfig(authHeaders)
 
-		logger.Infof("Get Authorization Sucess")
+		logger.Infof("Get Authorization Success")
 	}
 }
 

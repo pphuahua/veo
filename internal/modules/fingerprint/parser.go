@@ -133,7 +133,7 @@ func (p *DSLParser) evaluateContains(dsl string, ctx *DSLContext) (bool, bool) {
 				target = ctx.Response.Title
 			case "server":
 				target = ctx.Response.Server
-			case "url": // [重要] 新增：支持URL参数
+			case "url": // 新增：支持URL参数
 				target = ctx.URL
 			default:
 				return false, true

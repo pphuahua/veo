@@ -1,15 +1,15 @@
 package fingerprint
 
 import (
-    "fmt"
-    "net/url"
-    "strings"
-    "sync"
-    "veo/internal/core/config"
-    "veo/internal/core/logger"
-    "veo/internal/utils/filter"
-    "veo/internal/utils/shared"
-    "veo/proxy"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+	"veo/internal/core/config"
+	"veo/internal/core/logger"
+	"veo/internal/utils/filter"
+	"veo/internal/utils/shared"
+	"veo/proxy"
 )
 
 // ===========================================
@@ -119,10 +119,10 @@ func (fa *FingerprintAddon) Response(f *proxy.Flow) {
 
 	logger.Debugf("开始分析响应: %s", response.URL)
 
-    // 执行指纹识别（与主动模式保持一致，支持icon()等需要HTTP客户端的DSL特性）
-    matches := fa.engine.AnalyzeResponseWithClient(response, fa.httpClient)
+	// 执行指纹识别（与主动模式保持一致，支持icon()等需要HTTP客户端的DSL特性）
+	matches := fa.engine.AnalyzeResponseWithClient(response, fa.httpClient)
 
-	// [重要] 主动探测触发逻辑
+	// 主动探测触发逻辑
 	if fa.httpClient != nil {
 		hostKey := fa.extractDomainKey(response.URL)
 		shouldProbe := false
@@ -257,25 +257,9 @@ func (fa *FingerprintAddon) Enable() {
 	logger.Debugf("指纹识别已启用")
 }
 
-// Disable 禁用指纹识别
-func (fa *FingerprintAddon) Disable() {
-	fa.enabled = false
-	logger.Debugf("指纹识别已禁用")
-}
-
-// IsEnabled 检查是否启用
-func (fa *FingerprintAddon) IsEnabled() bool {
-	return fa.enabled
-}
-
 // GetEngine 获取引擎实例
 func (fa *FingerprintAddon) GetEngine() *Engine {
 	return fa.engine
-}
-
-// HasHTTPClient 检查是否已设置HTTP客户端（用于调试）
-func (fa *FingerprintAddon) HasHTTPClient() bool {
-	return fa.httpClient != nil
 }
 
 // GetMatches 获取匹配结果
@@ -286,16 +270,6 @@ func (fa *FingerprintAddon) GetMatches() []*FingerprintMatch {
 // GetStats 获取统计信息
 func (fa *FingerprintAddon) GetStats() *Statistics {
 	return fa.engine.GetStats()
-}
-
-// ClearMatches 清空匹配结果
-func (fa *FingerprintAddon) ClearMatches() {
-	fa.engine.ClearMatches()
-}
-
-// PrintStats 打印统计信息
-func (fa *FingerprintAddon) PrintStats() {
-	fa.engine.PrintStats()
 }
 
 // ReloadRules 重新加载规则
@@ -386,14 +360,14 @@ func CreateDefaultAddon() (*FingerprintAddon, error) {
 
 // extractAndDecompressBody 提取并解压响应体
 func (fa *FingerprintAddon) extractAndDecompressBody(f *proxy.Flow) string {
-    if f.Response.Body == nil {
-        return ""
-    }
-    rawBody := f.Response.Body
-    contentEncoding := f.Response.Header.Get("Content-Encoding")
-    decompressed := shared.DecompressByEncoding(rawBody, contentEncoding)
-    // 字符编码检测和转换
-    return fa.encodingDetector.DetectAndConvert(string(decompressed), f.Response.Header.Get("Content-Type"))
+	if f.Response.Body == nil {
+		return ""
+	}
+	rawBody := f.Response.Body
+	contentEncoding := f.Response.Header.Get("Content-Encoding")
+	decompressed := shared.DecompressByEncoding(rawBody, contentEncoding)
+	// 字符编码检测和转换
+	return fa.encodingDetector.DetectAndConvert(string(decompressed), f.Response.Header.Get("Content-Type"))
 }
 
 // ===========================================

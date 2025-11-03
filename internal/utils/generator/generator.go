@@ -1,27 +1,27 @@
 package generator
 
 import (
-    "fmt"
-    "net"
-    "net/url"
-    "strings"
-    "sync"
-    "veo/internal/core/interfaces"
-    "veo/internal/core/logger"
-    "veo/internal/utils/dictionary"
-    "veo/internal/utils/shared"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+	"veo/internal/core/interfaces"
+	"veo/internal/core/logger"
+	"veo/internal/utils/dictionary"
+	"veo/internal/utils/shared"
 )
 
 // 模板变量定义
 var templateVariables = map[string]string{
-    "{{domain}}": "", // 将在运行时被实际域名替换
-    "{{DOMAIN}}": "", // 支持大写形式
-    "{{host}}":   "", // host和domain是同义词
-    "{{HOST}}":   "", // 支持大写形式
-    "{{sub_domain}}": "", // 新增：子域名片段（不含顶级域）
-    "{{SUB_DOMAIN}}": "", // 支持大写形式
-    "{{path}}":   "", // 将在运行时被实际路径替换
-    "{{PATH}}":   "", // 支持大写形式
+	"{{domain}}":     "", // 将在运行时被实际域名替换
+	"{{DOMAIN}}":     "", // 支持大写形式
+	"{{host}}":       "", // host和domain是同义词
+	"{{HOST}}":       "", // 支持大写形式
+	"{{sub_domain}}": "", // 新增：子域名片段（不含顶级域）
+	"{{SUB_DOMAIN}}": "", // 支持大写形式
+	"{{path}}":       "", // 将在运行时被实际路径替换
+	"{{PATH}}":       "", // 支持大写形式
 }
 
 // URLGenerator URL生成器，专门负责生成扫描URL
@@ -86,17 +86,17 @@ func (ug *URLGenerator) GenerateURLsFromCollector(collector interfaces.URLCollec
 	return scanURLs
 }
 
-// GenerateURLs 从基础URL列表生成扫描URL（[重要] 性能优化版本）
+// GenerateURLs 从基础URL列表生成扫描URL（性能优化版本）
 func (ug *URLGenerator) GenerateURLs(baseURLs []string) []string {
 	ug.mu.Lock()
 	defer ug.mu.Unlock()
 
-	// [重要] 性能优化：预分配切片容量，避免频繁扩容
+	// 性能优化：预分配切片容量，避免频繁扩容
 	// 估算容量：基础URL数量 × 平均字典大小（约1800条目）
 	estimatedCapacity := len(baseURLs) * 1800
 	ug.generatedURLs = make([]string, 0, estimatedCapacity)
 
-	// [重要] 性能优化：移除每次的字典加载检查，依赖全局缓存
+	// 性能优化：移除每次的字典加载检查，依赖全局缓存
 	// 字典将在首次访问时自动加载到全局缓存
 
 	logger.Debug(fmt.Sprintf("开始生成扫描URL，基础URL数量: %d", len(baseURLs)))
@@ -174,72 +174,72 @@ func (ug *URLGenerator) generatePathLevelURLs(components URLComponents) {
 	}
 }
 
-// generateURLsFromDictionary 从字典生成URL（[重要] 性能优化版本）
+// generateURLsFromDictionary 从字典生成URL（性能优化版本）
 func (ug *URLGenerator) generateURLsFromDictionary(components URLComponents, basePath string, dictionary []string, dictType string) {
-    // 提取域名用于模板替换
-    domain := ug.extractDomainFromHost(components.Host)
-    // 提取子域名片段（不含顶级域）
-    subParts := ug.extractSubDomainParts(domain)
+	// 提取域名用于模板替换
+	domain := ug.extractDomainFromHost(components.Host)
+	// 提取子域名片段（不含顶级域）
+	subParts := ug.extractSubDomainParts(domain)
 
-	// [重要] 性能优化：使用strings.Builder减少字符串分配
+	// 性能优化：使用strings.Builder减少字符串分配
 	var urlBuilder strings.Builder
 
-	// [重要] 性能优化：预分配Builder容量
+	// 性能优化：预分配Builder容量
 	urlBuilder.Grow(len(components.Scheme) + len(components.Host) + 100) // 预估URL长度
 
-    for _, dictEntry := range dictionary {
-        // 判断是否包含 {{sub_domain}} 占位符，若包含则对每个子域名片段展开
-        entries := []string{dictEntry}
-        if (strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}")) && len(subParts) > 0 {
-            entries = make([]string, 0, len(subParts))
-            for _, part := range subParts {
-                e := strings.ReplaceAll(dictEntry, "{{sub_domain}}", part)
-                e = strings.ReplaceAll(e, "{{SUB_DOMAIN}}", part)
-                entries = append(entries, e)
-            }
-        } else if strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}") {
-            // 对于IP或无法解析子域名的目标，直接跳过包含该占位符的字典项
-            continue
-        }
+	for _, dictEntry := range dictionary {
+		// 判断是否包含 {{sub_domain}} 占位符，若包含则对每个子域名片段展开
+		entries := []string{dictEntry}
+		if (strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}")) && len(subParts) > 0 {
+			entries = make([]string, 0, len(subParts))
+			for _, part := range subParts {
+				e := strings.ReplaceAll(dictEntry, "{{sub_domain}}", part)
+				e = strings.ReplaceAll(e, "{{SUB_DOMAIN}}", part)
+				entries = append(entries, e)
+			}
+		} else if strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}") {
+			// 对于IP或无法解析子域名的目标，直接跳过包含该占位符的字典项
+			continue
+		}
 
-        for _, expanded := range entries {
-            // 处理模板变量替换（domain/path等）
-            processedEntry := ug.processTemplateVariables(expanded, domain, basePath)
+		for _, expanded := range entries {
+			// 处理模板变量替换（domain/path等）
+			processedEntry := ug.processTemplateVariables(expanded, domain, basePath)
 
-		// [重要] 修复：清理字典条目的前导斜杠，避免双斜杠问题
-		processedEntry = strings.TrimPrefix(processedEntry, "/")
+			// 修复：清理字典条目的前导斜杠，避免双斜杠问题
+			processedEntry = strings.TrimPrefix(processedEntry, "/")
 
-            // [重要] 性能优化：使用Builder构建URL，避免多次字符串拼接
-            urlBuilder.Reset()
-            urlBuilder.WriteString(components.Scheme)
-            urlBuilder.WriteString("://")
-            urlBuilder.WriteString(components.Host)
+			// 性能优化：使用Builder构建URL，避免多次字符串拼接
+			urlBuilder.Reset()
+			urlBuilder.WriteString(components.Scheme)
+			urlBuilder.WriteString("://")
+			urlBuilder.WriteString(components.Host)
 
-            // 构建路径部分
-            if basePath != "" {
-                urlBuilder.WriteString(basePath)
-                if !strings.HasSuffix(basePath, "/") {
-                    urlBuilder.WriteString("/")
-                }
-            } else {
-                urlBuilder.WriteString("/")
-            }
-            urlBuilder.WriteString(processedEntry)
+			// 构建路径部分
+			if basePath != "" {
+				urlBuilder.WriteString(basePath)
+				if !strings.HasSuffix(basePath, "/") {
+					urlBuilder.WriteString("/")
+				}
+			} else {
+				urlBuilder.WriteString("/")
+			}
+			urlBuilder.WriteString(processedEntry)
 
-            // 添加查询参数（如果需要）
-            if !ug.fileChecker.IsStaticFile(processedEntry) && components.Query != "" {
-                urlBuilder.WriteString("?")
-                urlBuilder.WriteString(components.Query)
-            }
+			// 添加查询参数（如果需要）
+			if !ug.fileChecker.IsStaticFile(processedEntry) && components.Query != "" {
+				urlBuilder.WriteString("?")
+				urlBuilder.WriteString(components.Query)
+			}
 
-            scanURL := urlBuilder.String()
+			scanURL := urlBuilder.String()
 
-            // [重要] 性能优化：简化URL验证，减少不必要的检查
-            if len(scanURL) > 0 && len(scanURL) < 2048 { // 基本长度检查
-                ug.generatedURLs = append(ug.generatedURLs, scanURL)
-            }
-        }
-    }
+			// 性能优化：简化URL验证，减少不必要的检查
+			if len(scanURL) > 0 && len(scanURL) < 2048 { // 基本长度检查
+				ug.generatedURLs = append(ug.generatedURLs, scanURL)
+			}
+		}
+	}
 
 	logger.Debug(fmt.Sprintf("使用%s生成URL完成", dictType))
 }
@@ -253,11 +253,11 @@ func (ug *URLGenerator) splitPath(path string) []string {
 	return strings.Split(path, "/")
 }
 
-// deduplicateURLs 去重URL（[重要] 性能优化版本）
+// deduplicateURLs 去重URL（性能优化版本）
 func (ug *URLGenerator) deduplicateURLs() {
 	beforeCount := len(ug.generatedURLs)
 
-	// [重要] 性能优化：预分配map容量，减少rehash
+	// 性能优化：预分配map容量，减少rehash
 	seen := make(map[string]bool, beforeCount)
 	uniqueURLs := make([]string, 0, beforeCount)
 
@@ -370,22 +370,22 @@ func (ug *URLGenerator) extractDomainFromHost(host string) string {
 //   - 含有点号的域名，返回去除最后一个标签后的所有标签
 //   - 单标签域名，返回该标签
 func (ug *URLGenerator) extractSubDomainParts(domain string) []string {
-    if domain == "" {
-        return nil
-    }
-    host := domain
-    if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-        host = strings.Trim(host, "[]")
-    }
-    if ip := net.ParseIP(host); ip != nil {
-        return nil
-    }
-    parts := strings.Split(host, ".")
-    if len(parts) <= 1 {
-        return parts
-    }
-    // 去除最后一个顶级域标签
-    return parts[:len(parts)-1]
+	if domain == "" {
+		return nil
+	}
+	host := domain
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.Trim(host, "[]")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return nil
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) <= 1 {
+		return parts
+	}
+	// 去除最后一个顶级域标签
+	return parts[:len(parts)-1]
 }
 
 // ============================================================================
