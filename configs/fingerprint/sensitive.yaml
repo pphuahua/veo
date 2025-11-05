@@ -157,10 +157,6 @@ gitmind泄漏:
   dsl:
   - contains(body, 'wj.qq.com/s')
 
-内网地址泄漏:
-  dsl:
-  - regex(body, '[^0-9]((10\.\d{1,3}\.\d{1,3}\.\d{1,3})|(172\.((1[6-9])|(2\d)|(3[01]))\.\d{1,3}\.\d{1,3})|(192\.168\.\d{1,3}\.\d{1,3}))')
-
 系统绝对路径泄漏:
   dsl:
   - regex(body, '[A-Z]{1}[:]{1}[\\]{1}[a-zA-Z0-9._-]{2,}[\\]{1}[a-zA-Z0-9._-]*')
@@ -274,10 +270,6 @@ UCloud:
   dsl:
   - regex(body, '(YYT[A-Za-z0-9]{10,60})')
 
-南大通用云:
-  dsl:
-  - regex(body, '(CI[A-Za-z0-9]{10,40})')
-
 G-Core-Labs:  
   dsl:
   - regex(body, '(gcore[A-Za-z0-9]{10,30})')
@@ -310,7 +302,6 @@ email:
   dsl:
   - contains(body, '</A><br></pre><hr></body></html>')
 
-Portainer:
+疑似struts框架:
   dsl:
-  - title('Portainer面板')
-  - contains(body, 'portainer.updatePassword','portainer.init.admin','images/logo_alt.png')
+    - "contains(body, '.action')"

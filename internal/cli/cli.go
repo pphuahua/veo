@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -79,7 +80,7 @@ type CLIArgs struct {
 	// 指纹细节输出开关
 	VeryVerbose        bool // 指纹匹配内容展示开关 (-vv)
 	NoAliveCheck       bool // 跳过存活检测 (-na)
-	EnableServiceProbe bool // 启用端口服务识别 (-sV)
+	EnableServiceProbe bool // 启用端口服务识别 (默认开启，-sV 关闭)
 
 	// 新增：HTTP认证头部参数
 	Headers []string // 自定义HTTP认证头部 (--header "Header-Name: Header-Value")
@@ -218,7 +219,7 @@ func ParseCLIArgs() *CLIArgs {
 		noColor      = flag.Bool("nc", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
 		jsonOutput   = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
 		noAlive      = flag.Bool("na", false, "跳过扫描前的存活检测 (默认进行存活检测)")
-		serviceProbe = flag.Bool("sV", false, "启用端口服务识别 (默认关闭)")
+		serviceProbe = flag.Bool("sV", false, "禁用端口服务识别 (默认开启)")
 
 		// 新增：状态码过滤参数
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
@@ -265,7 +266,7 @@ func ParseCLIArgs() *CLIArgs {
 		NoColor:            *noColor,
 		JSONOutput:         *jsonOutput,
 		NoAliveCheck:       *noAlive,
-		EnableServiceProbe: *serviceProbe,
+		EnableServiceProbe: !*serviceProbe,
 
 		// 新增：HTTP认证头部参数
 		Headers: []string(headers),
@@ -351,7 +352,7 @@ veo - 端口扫描/指纹识别/目录扫描
   -p string            端口表达式，例如 80,443,8000-8100
   -pw string           端口字典文件或预设(top/web/service)，未指定 -p 时使用
   --rate int           探测速率，默认 2048；大于 2048 时按 2048 为一批运行
-  -sV                  启用服务识别（内置指纹 + HTTP fallback）
+  -sV                  禁用服务识别（默认开启，可省略该参数）
 
 扫描控制:
   --debug              输出调试日志
@@ -820,7 +821,7 @@ func createProxy() (*proxy.Proxy, error) {
 
 // runMasscanPortScan 调用 masscan 扫描（模块化实现）
 func runMasscanPortScan(args *CLIArgs) error {
-	results, portsExpr, effectiveRate, err := runPortScanAndCollect(args, args.Targets, true, true)
+	results, portsExpr, effectiveRate, err := runPortScanAndCollect(args, args.Targets, true, false)
 	if err != nil {
 		return err
 	}
@@ -1431,7 +1432,7 @@ func isPortExpression(raw string) bool {
 }
 
 func logPortScanBanner(ports string, rate int) {
-	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate=%d", ports, rate)))
+	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate: %d", ports, rate)))
 }
 
 func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, printResults bool) ([]portscanpkg.OpenPortResult, string, int, error) {
@@ -1446,7 +1447,7 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 		args.Ports = fallback
 		logger.Warnf("加载端口字典失败: %v，改用目标推导端口: %s", err, portsExpr)
 	} else if portSource != "" {
-		logger.Infof("使用端口字典: %s", portSource)
+		logger.Infof("Use Port Dict: %s", portSource)
 	}
 
 	var msTargets []string
@@ -1478,7 +1479,11 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 		return nil, portsExpr, effectiveRate, err
 	}
 
-	results = portscanservice.Identify(context.Background(), results, portscanservice.Options{})
+	results = deduplicateOpenPorts(results)
+
+	if args.EnableServiceProbe {
+		results = portscanservice.Identify(context.Background(), results, portscanservice.Options{})
+	}
 
 	if printResults {
 		for _, r := range results {
@@ -1492,4 +1497,32 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 	}
 
 	return results, portsExpr, effectiveRate, nil
+}
+
+func deduplicateOpenPorts(results []portscanpkg.OpenPortResult) []portscanpkg.OpenPortResult {
+	if len(results) <= 1 {
+		return results
+	}
+	seen := make(map[string]portscanpkg.OpenPortResult, len(results))
+	for _, r := range results {
+		key := fmt.Sprintf("%s:%d", r.IP, r.Port)
+		if existing, ok := seen[key]; ok {
+			if strings.TrimSpace(existing.Service) == "" && strings.TrimSpace(r.Service) != "" {
+				seen[key] = r
+			}
+			continue
+		}
+		seen[key] = r
+	}
+	deduped := make([]portscanpkg.OpenPortResult, 0, len(seen))
+	for _, r := range seen {
+		deduped = append(deduped, r)
+	}
+	sort.Slice(deduped, func(i, j int) bool {
+		if deduped[i].IP == deduped[j].IP {
+			return deduped[i].Port < deduped[j].Port
+		}
+		return deduped[i].IP < deduped[j].IP
+	})
+	return deduped
 }

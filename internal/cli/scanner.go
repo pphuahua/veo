@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +40,94 @@ type FingerprintProgressTracker struct {
 	baseURL     string // 基础URL
 	mu          sync.Mutex
 	enabled     bool
+}
+
+func shouldUsePortFirst(args *CLIArgs) bool {
+	if strings.TrimSpace(args.Ports) == "" {
+		return false
+	}
+	rawTargets, err := collectRawTargets(args)
+	if err != nil {
+		logger.Warnf("解析目标失败，回退到非端口优先模式: %v", err)
+		return false
+	}
+	if len(rawTargets) == 0 {
+		return false
+	}
+	multiCount := 0
+	for _, target := range rawTargets {
+		if isMultiTargetExpression(target) {
+			multiCount++
+		}
+	}
+	if multiCount > 0 {
+		if multiCount < len(rawTargets) {
+			logger.Infof("检测到混合目标（单目标与范围共存），优先执行端口扫描流程")
+		}
+		return true
+	}
+	return false
+}
+
+func collectRawTargets(args *CLIArgs) ([]string, error) {
+	var raw []string
+	raw = append(raw, args.Targets...)
+	if strings.TrimSpace(args.TargetFile) != "" {
+		parser := batch.NewTargetParser()
+		fileTargets, err := parser.ParseFile(strings.TrimSpace(args.TargetFile))
+		if err != nil {
+			return nil, err
+		}
+		raw = append(raw, fileTargets...)
+	}
+	return raw, nil
+}
+
+func isMultiTargetExpression(target string) bool {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return false
+	}
+	if _, _, err := net.ParseCIDR(trimmed); err == nil {
+		return true
+	}
+	if isIPRangeExpression(trimmed) {
+		return true
+	}
+	return false
+}
+
+func isIPRangeExpression(expr string) bool {
+	if !strings.Contains(expr, "-") {
+		return false
+	}
+	parts := strings.SplitN(expr, "-", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+	if net.ParseIP(left) != nil && net.ParseIP(right) != nil {
+		return true
+	}
+	if idx := strings.LastIndex(left, "."); idx != -1 {
+		prefix := left[:idx+1]
+		startStr := left[idx+1:]
+		if _, err := strconv.Atoi(startStr); err != nil {
+			return false
+		}
+		if _, err := strconv.Atoi(right); err != nil {
+			return false
+		}
+		if net.ParseIP(prefix+"0") != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // NewFingerprintProgressTracker 创建指纹识别进度跟踪器
@@ -104,6 +194,7 @@ type ScanController struct {
 	lastPortResults        []portscanpkg.OpenPortResult
 	lastPortExpr           string
 	lastPortRate           int
+	portFirstMode          bool
 
 	// 缓存最近一次各模块结果（用于合并报告落盘）
 	lastDirscanResults     []interfaces.HTTPResponse
@@ -204,6 +295,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		probedHosts:            make(map[string]bool),              // 初始化探测缓存
 		statsDisplay:           statsDisplay,                       // 初始化统计显示器
 		showFingerprintSnippet: snippetEnabled,
+		portFirstMode:          shouldUsePortFirst(args),
 	}
 }
 
@@ -223,11 +315,25 @@ func (sc *ScanController) Run() error {
 func (sc *ScanController) runActiveMode() error {
 	logger.Debug("启动主动扫描模式")
 
+	rawTargets, err := collectRawTargets(sc.args)
+	if err != nil {
+		return fmt.Errorf("目标解析失败: %v", err)
+	}
+	if len(rawTargets) == 0 {
+		return fmt.Errorf("没有有效的目标")
+	}
+
+	if sc.portFirstMode {
+		sc.lastTargets = rawTargets
+		return sc.runPortFirstWorkflow(rawTargets)
+	}
+
 	// 解析和验证目标URL
 	targets, err := sc.parseTargets(sc.args.Targets)
 	if err != nil {
 		return fmt.Errorf("目标解析失败: %v", err)
 	}
+
 	sc.lastTargets = targets
 
 	logger.Debugf("解析到 %d 个目标", len(targets))
@@ -246,33 +352,9 @@ func (sc *ScanController) runActiveMode() error {
 	// 顺序执行各个模块，避免模块上下文冲突
 	// 优化执行顺序：指纹识别优先，然后目录扫描
 	orderedModules := sc.getOptimizedModuleOrder()
+	allResults, dirscanResults, fingerprintResults = sc.executeModulesSequence(orderedModules, targets)
 
-	for i, moduleName := range orderedModules {
-		logger.Debugf("开始执行模块: %s (%d/%d)", moduleName, i+1, len(orderedModules))
-
-		moduleResults, err := sc.runModuleForTargets(moduleName, targets)
-		if err != nil {
-			logger.Errorf("模块 %s 执行失败: %v", moduleName, err)
-			continue
-		}
-
-		// 合并结果
-		allResults = append(allResults, moduleResults...)
-		switch moduleName {
-		case string(modulepkg.ModuleDirscan):
-			dirscanResults = append(dirscanResults, moduleResults...)
-		case string(modulepkg.ModuleFinger):
-			fingerprintResults = append(fingerprintResults, moduleResults...)
-		}
-		logger.Debugf("模块 %s 完成，获得 %d 个结果", moduleName, len(moduleResults))
-
-		// 在模块执行之间添加分隔（混合模式）
-		if len(orderedModules) > 1 && i < len(orderedModules)-1 && !sc.args.JSONOutput {
-			fmt.Println() // 添加空行分隔
-		}
-	}
-
-	if strings.TrimSpace(sc.args.Ports) != "" {
+	if strings.TrimSpace(sc.args.Ports) != "" && !sc.portFirstMode {
 		newAll, newDir, newFinger := sc.performPortScanAndRescan()
 		if len(newAll) > 0 {
 			allResults = append(allResults, newAll...)
@@ -288,15 +370,56 @@ func (sc *ScanController) runActiveMode() error {
 	// [修复] 删除重复的已完成主机数更新
 	// 已完成主机数由各个模块在目标完成时单独更新，避免重复计数
 
+	return sc.finalizeScan(allResults, dirscanResults, fingerprintResults)
+}
+
+// GetRequestProcessor 获取请求处理器（用于测试和调试）
+func (sc *ScanController) GetRequestProcessor() *requests.RequestProcessor {
+	return sc.requestProcessor
+}
+
+func (sc *ScanController) executeModulesSequence(modules []string, targets []string) ([]interfaces.HTTPResponse, []interfaces.HTTPResponse, []interfaces.HTTPResponse) {
+	var allResults []interfaces.HTTPResponse
+	var dirResults []interfaces.HTTPResponse
+	var fingerprintResults []interfaces.HTTPResponse
+
+	if len(modules) == 0 || len(targets) == 0 {
+		return allResults, dirResults, fingerprintResults
+	}
+
+	for i, moduleName := range modules {
+		logger.Debugf("开始执行模块: %s (%d/%d)", moduleName, i+1, len(modules))
+
+		moduleResults, err := sc.runModuleForTargets(moduleName, targets)
+		if err != nil {
+			logger.Errorf("模块 %s 执行失败: %v", moduleName, err)
+			continue
+		}
+
+		allResults = append(allResults, moduleResults...)
+		switch moduleName {
+		case string(modulepkg.ModuleDirscan):
+			dirResults = append(dirResults, moduleResults...)
+		case string(modulepkg.ModuleFinger):
+			fingerprintResults = append(fingerprintResults, moduleResults...)
+		}
+		logger.Debugf("模块 %s 完成，获得 %d 个结果", moduleName, len(moduleResults))
+
+		if len(modules) > 1 && i < len(modules)-1 && !sc.args.JSONOutput {
+			fmt.Println()
+		}
+	}
+
+	return allResults, dirResults, fingerprintResults
+}
+
+func (sc *ScanController) finalizeScan(allResults, dirResults, fingerprintResults []interfaces.HTTPResponse) error {
 	logger.Debugf("所有模块执行完成，总结果数: %d", len(allResults))
 
-	// 检查是否只有指纹识别模块
-	onlyFingerprint := len(sc.args.Modules) == 1 && sc.args.Modules[0] == "finger"
-
+	onlyFingerprint := len(sc.args.Modules) == 1 && sc.args.Modules[0] == string(modulepkg.ModuleFinger)
 	var filterResult *interfaces.FilterResult
+
 	if onlyFingerprint {
-		// 指纹识别模块不需要Filter处理，直接使用原始结果
-		logger.Debugf("指纹识别模块跳过Filter处理")
 		pages := fingerprintResults
 		if len(pages) == 0 {
 			pages = allResults
@@ -305,54 +428,82 @@ func (sc *ScanController) runActiveMode() error {
 			ValidPages: pages,
 		}
 	} else {
-		// [修改] 目录扫描模块已在各目标扫描时独立应用过滤器
-		// 这里的allResults已经是过滤后的结果，直接使用
-		logger.Debugf("使用已过滤的结果，数量: %d", len(allResults))
 		filterResult = &interfaces.FilterResult{
 			ValidPages: allResults,
 		}
-
-		// 显示最终合并统计
 		if len(allResults) > 0 {
 			logger.Debugf("所有目标过滤完成，最终有效结果: %d", len(allResults))
 		}
 	}
 
-	// 缓存最近一次结果（用于后续合并报告输出）
-	sc.lastDirscanResults = dirscanResults
+	sc.lastDirscanResults = dirResults
 	sc.lastFingerprintResults = fingerprintResults
 
-	// 生成报告（支持指纹识别、目录扫描和端口扫描的JSON/Excel输出）
-	// 调整：只要指定了 --output，即生成报告；
-	// 当输出为 .json 且指定了 -p 时，generateCustomReport 内部会输出“合并 JSON”（dir + finger + port）。
-	if sc.args.Output != "" {
-		if err = sc.generateReport(filterResult); err != nil {
+	if strings.TrimSpace(sc.args.Output) != "" {
+		if err := sc.generateReport(filterResult); err != nil {
 			logger.Errorf("报告生成失败: %v", err)
 		}
 	}
 
-	// 显示最终统计并禁用统计显示器
 	if sc.statsDisplay.IsEnabled() {
 		sc.statsDisplay.ShowFinalStats()
 		sc.statsDisplay.Disable()
 	}
 
 	if sc.args.JSONOutput {
-		jsonStr, err := sc.generateConsoleJSON(dirscanResults, fingerprintResults, filterResult)
+		jsonStr, err := sc.generateConsoleJSON(dirResults, fingerprintResults, filterResult)
 		if err != nil {
 			logger.Errorf("生成JSON输出失败: %v", err)
 		} else {
 			fmt.Println(jsonStr)
 		}
-		return nil
 	}
 
 	return nil
 }
 
-// GetRequestProcessor 获取请求处理器（用于测试和调试）
-func (sc *ScanController) GetRequestProcessor() *requests.RequestProcessor {
-	return sc.requestProcessor
+func (sc *ScanController) runPortFirstWorkflow(rawTargets []string) error {
+	logger.Debug("检测到端口优先模式，先执行端口扫描")
+
+	if sc.statsDisplay.IsEnabled() {
+		sc.statsDisplay.SetTotalHosts(int64(len(rawTargets)))
+	}
+
+	results, portsExpr, rate, err := runPortScanAndCollect(sc.args, rawTargets, true, true)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		logger.Info("端口扫描完成，未发现开放端口")
+		return sc.finalizeScan(nil, nil, nil)
+	}
+
+	sc.lastPortResults = results
+	sc.lastPortExpr = portsExpr
+	sc.lastPortRate = rate
+
+	httpTargets := buildHTTPRescanTargets(results)
+	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
+	if len(filteredTargets) == 0 {
+		logger.Info("端口扫描未发现 HTTP/HTTPS 服务，无需二轮扫描")
+		return sc.finalizeScan(nil, nil, nil)
+	}
+
+	sc.lastTargets = filteredTargets
+	if sc.statsDisplay.IsEnabled() {
+		sc.statsDisplay.SetTotalHosts(int64(len(filteredTargets)))
+	}
+
+	modules := sc.getSecondPassModules()
+	if len(modules) == 0 {
+		logger.Info("未启用指纹或目录扫描模块，跳过二轮扫描")
+		return sc.finalizeScan(nil, nil, nil)
+	}
+
+	logger.Infof("Detected %d HTTP/HTTPS services, starting rescan", len(filteredTargets))
+	allResults, dirResults, fingerprintResults := sc.executeModulesSequence(modules, filteredTargets)
+
+	return sc.finalizeScan(allResults, dirResults, fingerprintResults)
 }
 
 // runPassiveMode 运行被动代理模式
@@ -707,6 +858,14 @@ func appendUniqueTargets(base []string, additional []string) []string {
 
 // runDirscanModule 运行目录扫描模块（多目标并发优化）
 func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPResponse, error) {
+	originalContext := sc.requestProcessor.GetModuleContext()
+	sc.requestProcessor.SetModuleContext("dirscan")
+	sc.requestProcessor.ResetConnectionRefusedState()
+	defer func() {
+		sc.requestProcessor.ResetConnectionRefusedState()
+		sc.requestProcessor.SetModuleContext(originalContext)
+	}()
+
 	// 模块启动提示
 	dictInfo := "dict/common.txt"
 	if sc.args != nil && strings.TrimSpace(sc.args.Wordlist) != "" {
@@ -752,10 +911,6 @@ func (sc *ScanController) runConcurrentDirscan(targets []string) ([]interfaces.H
 			httpResp := interfaces.HTTPResponse{
 				URL:             resp.URL,
 				StatusCode:      resp.StatusCode,
-				FinalStatusCode: resp.FinalStatusCode,
-				FinalURL:        resp.FinalURL,
-				RedirectChain:   append([]int(nil), resp.RedirectChain...),
-				Redirected:      resp.Redirected,
 				ContentLength:   resp.ContentLength,
 				ContentType:     resp.ContentType,
 				ResponseHeaders: resp.ResponseHeaders,
@@ -804,10 +959,6 @@ func (sc *ScanController) runSequentialDirscan(targets []string) ([]interfaces.H
 			httpResp := interfaces.HTTPResponse{
 				URL:             resp.URL,
 				StatusCode:      resp.StatusCode,
-				FinalStatusCode: resp.FinalStatusCode,
-				FinalURL:        resp.FinalURL,
-				RedirectChain:   append([]int(nil), resp.RedirectChain...),
-				Redirected:      resp.Redirected,
 				ContentLength:   resp.ContentLength,
 				ContentType:     resp.ContentType,
 				ResponseHeaders: resp.ResponseHeaders,
@@ -1029,10 +1180,6 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 			httpResp := interfaces.HTTPResponse{
 				URL:             resp.URL,
 				StatusCode:      resp.StatusCode,
-				FinalStatusCode: resp.FinalStatusCode,
-				FinalURL:        resp.FinalURL,
-				RedirectChain:   append([]int(nil), resp.RedirectChain...),
-				Redirected:      resp.Redirected,
 				ContentLength:   resp.ContentLength,
 				ContentType:     resp.ContentType,
 				ResponseHeaders: resp.ResponseHeaders,
@@ -1095,10 +1242,6 @@ func (sc *ScanController) processSingleTargetFingerprint(target string) []interf
 		httpResp := interfaces.HTTPResponse{
 			URL:             resp.URL,
 			StatusCode:      resp.StatusCode,
-			FinalStatusCode: resp.FinalStatusCode,
-			FinalURL:        resp.FinalURL,
-			RedirectChain:   append([]int(nil), resp.RedirectChain...),
-			Redirected:      resp.Redirected,
 			ContentLength:   resp.ContentLength,
 			ContentType:     resp.ContentType,
 			ResponseHeaders: resp.ResponseHeaders,

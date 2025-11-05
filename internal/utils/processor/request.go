@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -108,13 +108,16 @@ type RequestProcessor struct {
 	userAgentPool  []string               // UserAgent池
 	titleExtractor *shared.TitleExtractor // 标题提取器
 	moduleContext  string                 // 模块上下文标识（用于区分调用来源）
-	workerPool     *WorkerPool            // 并发优化：工作池
 	statsUpdater   StatsUpdater           // 统计更新器
 	batchMode      bool                   // 批量扫描模式标志
 
 	// 新增：HTTP认证头部管理
 	customHeaders map[string]string  // CLI指定的自定义头部
 	authDetector  *auth.AuthDetector // 认证检测器
+
+	connectionRefusedThreshold int
+	connectionRefusedCountMap  map[string]int
+	blockedHosts               map[string]struct{}
 }
 
 // ===========================================
@@ -134,8 +137,11 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		titleExtractor: shared.NewTitleExtractor(),
 
 		// 新增：初始化认证头部管理
-		customHeaders: make(map[string]string),
-		authDetector:  auth.NewAuthDetector(),
+		customHeaders:              make(map[string]string),
+		authDetector:               auth.NewAuthDetector(),
+		connectionRefusedThreshold: 5,
+		connectionRefusedCountMap:  make(map[string]int),
+		blockedHosts:               make(map[string]struct{}),
 	}
 
 	return processor
@@ -377,6 +383,10 @@ func (rp *RequestProcessor) processWorkerResult(result WorkerResult, responses *
 
 // processURLWithStats 处理单个URL并更新统计
 func (rp *RequestProcessor) processURLWithStats(targetURL string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
+	if rp.isHostBlocked(targetURL) {
+		logger.Debugf("跳过已被屏蔽的目标: %s", targetURL)
+		return
+	}
 	// 请求延迟
 	if rp.config.Delay > 0 {
 		time.Sleep(rp.config.Delay)
@@ -393,6 +403,10 @@ func (rp *RequestProcessor) processURLWithStats(targetURL string, responses *[]*
 func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 	var response *interfaces.HTTPResponse
 	var err error
+	if rp.isHostBlocked(url) {
+		logger.Debugf("跳过已被屏蔽的目标: %s", url)
+		return nil
+	}
 
 	// 改进的重试逻辑（指数退避 + 抖动）
 	for attempt := 0; attempt <= rp.config.MaxRetries; attempt++ {
@@ -436,50 +450,24 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 // makeRequest 使用fasthttp发起请求
 func (rp *RequestProcessor) makeRequest(rawURL string) (*interfaces.HTTPResponse, error) {
 	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
 
 	rp.prepareRequest(req, rawURL)
 	startTime := time.Now()
 
-	var (
-		resp        *fasthttp.Response
-		finalURL    string
-		statusChain []int
-		err         error
-	)
-
-	if rp.config.FollowRedirect {
-		resp, finalURL, statusChain, err = rp.performRequestWithRedirects(req, rawURL)
-	} else {
-		resp = fasthttp.AcquireResponse()
-		err = rp.client.DoTimeout(req, resp, rp.config.Timeout)
-		finalURL = rawURL
-		if err == nil {
-			statusChain = []int{resp.StatusCode()}
-		}
-	}
-
+	err := rp.client.DoTimeout(req, resp, rp.config.Timeout)
 	if err != nil {
 		rp.logRequestError(rawURL, err)
-		if resp != nil {
-			fasthttp.ReleaseResponse(resp)
-		}
 		return nil, fmt.Errorf("请求失败: %v", err)
-	}
-	if len(statusChain) == 0 {
-		statusChain = []int{resp.StatusCode()}
 	}
 
 	duration := time.Since(startTime)
 	logger.Debug(fmt.Sprintf("fasthttp请求完成: %s [%d] 耗时: %v",
-		rawURL, statusChain[len(statusChain)-1], duration))
+		rawURL, resp.StatusCode(), duration))
 
-	response, buildErr := rp.buildHTTPResponse(rawURL, finalURL, statusChain, req, resp, startTime)
-	fasthttp.ReleaseResponse(resp)
-	if buildErr != nil {
-		return nil, buildErr
-	}
-	return response, nil
+	return rp.buildHTTPResponse(rawURL, req, resp, startTime)
 }
 
 // prepareRequest 准备HTTP请求
@@ -489,75 +477,46 @@ func (rp *RequestProcessor) prepareRequest(req *fasthttp.Request, rawURL string)
 	rp.setRequestHeaders(&req.Header)
 }
 
-// performRequestWithRedirects 执行HTTP请求并跟随重定向，返回最终响应及重定向链
-func (rp *RequestProcessor) performRequestWithRedirects(baseReq *fasthttp.Request, rawURL string) (*fasthttp.Response, string, []int, error) {
-	currentURL := rawURL
-	statusChain := make([]int, 0, 6)
-
-	var finalResp *fasthttp.Response
-	const maxRedirects = 5
-
-	for redirect := 0; redirect <= maxRedirects; redirect++ {
-		req := fasthttp.AcquireRequest()
-		baseReq.CopyTo(req)
-		req.SetRequestURI(currentURL)
-
-		resp := fasthttp.AcquireResponse()
-		err := rp.client.DoTimeout(req, resp, rp.config.Timeout)
-		fasthttp.ReleaseRequest(req)
-		if err != nil {
-			fasthttp.ReleaseResponse(resp)
-			return nil, "", statusChain, err
-		}
-
-		status := resp.StatusCode()
-		statusChain = append(statusChain, status)
-
-		if !rp.isRedirectStatus(status) {
-			finalResp = resp
-			break
-		}
-
-		location := rp.findLocationHeader(resp)
-		if location == "" {
-			fasthttp.ReleaseResponse(resp)
-			return nil, "", statusChain, fmt.Errorf("重定向响应缺少Location头")
-		}
-
-		nextURL, err := rp.resolveRedirectURL(currentURL, location)
-		if err != nil {
-			fasthttp.ReleaseResponse(resp)
-			return nil, "", statusChain, err
-		}
-
-		fasthttp.ReleaseResponse(resp)
-		currentURL = nextURL
-		if redirect == maxRedirects {
-			return nil, "", statusChain, fmt.Errorf("超过最大重定向次数: %d", maxRedirects)
-		}
-	}
-
-	if finalResp == nil {
-		return nil, "", statusChain, fmt.Errorf("未获取最终响应")
-	}
-	return finalResp, currentURL, statusChain, nil
-}
-
 // logRequestError 记录请求错误日志
 func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
 	if rp.isTimeoutOrCanceledError(err) {
 		logger.Debugf("[超时丢弃] URL: %s, 耗时: >%v, 错误: %v", rawURL, rp.config.Timeout, err)
 	} else if rp.isRedirectError(err) {
 		logger.Warnf("重定向处理失败: %s, 错误: %v", rawURL, err)
+	} else if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
+		logger.Warnf("请求被目标拒绝 (可能存在防护): %s, 错误: %v", rawURL, err)
+		rp.handleConnectionRefused(rawURL)
 	} else {
 		logger.Debugf("请求失败: %s, 错误: %v", rawURL, err)
 	}
 }
 
+func (rp *RequestProcessor) handleConnectionRefused(rawURL string) {
+	if !strings.Contains(rp.moduleContext, "dirscan") {
+		return
+	}
+	hostKey := rp.extractHostKey(rawURL)
+	if hostKey == "" {
+		return
+	}
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+
+	count := rp.connectionRefusedCountMap[hostKey] + 1
+	rp.connectionRefusedCountMap[hostKey] = count
+	if count >= rp.connectionRefusedThreshold {
+		if _, blocked := rp.blockedHosts[hostKey]; !blocked {
+			rp.blockedHosts[hostKey] = struct{}{}
+			logger.Warnf("检测到目标 %s 多次连接被拒绝，疑似存在防护设备（WAF），已忽略该目标的目录扫描", hostKey)
+		}
+	}
+}
+
 // buildHTTPResponse 构建HTTP响应对象
-func (rp *RequestProcessor) buildHTTPResponse(rawURL, finalURL string, statusChain []int, req *fasthttp.Request, resp *fasthttp.Response, startTime time.Time) (*interfaces.HTTPResponse, error) {
+func (rp *RequestProcessor) buildHTTPResponse(rawURL string, req *fasthttp.Request, resp *fasthttp.Response, startTime time.Time) (*interfaces.HTTPResponse, error) {
 	requestHeaders := rp.extractRequestHeaders(&req.Header)
-	return rp.processResponse(rawURL, finalURL, statusChain, resp, requestHeaders, startTime)
+	return rp.processResponse(rawURL, resp, requestHeaders, startTime)
 }
 
 // ===========================================
@@ -824,38 +783,25 @@ func (rp *RequestProcessor) processResponseBody(rawBody []byte) string {
 }
 
 // processResponse 处理fasthttp响应，构建HTTPResponse结构体
-func (rp *RequestProcessor) processResponse(originalURL, finalURL string, statusChain []int, resp *fasthttp.Response, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
+func (rp *RequestProcessor) processResponse(url string, resp *fasthttp.Response, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
 	// 提取响应基本信息
 	body := rp.processResponseBody(resp.Body())
-	title := rp.extractTitleSafely(finalURL, body)
+	title := rp.extractTitleSafely(url, body)
 	contentLength := rp.getContentLength(resp, body)
 	contentType := rp.getContentType(resp)
-	responseHeaders := rp.extractResponseHeadersSafely(finalURL, resp)
-	server := rp.extractServerInfoSafely(finalURL, resp)
+	responseHeaders := rp.extractResponseHeadersSafely(url, resp)
+	server := rp.extractServerInfoSafely(url, resp)
 	duration := time.Since(startTime).Milliseconds()
 
-	if len(statusChain) == 0 {
-		statusChain = []int{resp.StatusCode()}
-	}
-	originalStatus := statusChain[0]
-	finalStatus := statusChain[len(statusChain)-1]
-
 	// 构建响应对象
-	response := rp.buildResponseObject(originalURL, finalURL, statusChain, title, contentLength, contentType, body, responseHeaders, requestHeaders, server, duration)
-	response.FinalStatusCode = finalStatus
-	response.Redirected = len(statusChain) > 1
+	response := rp.buildResponseObject(url, resp, title, contentLength, contentType, body, responseHeaders, requestHeaders, server, duration)
 
 	// 新增：处理认证检测（仅在401/403响应时且未设置自定义头部时）
-	rp.handleAuthDetection(resp, finalURL)
+	rp.handleAuthDetection(resp, url)
 
 	// 记录处理完成日志
-	if len(statusChain) > 1 {
-		logger.Debug(fmt.Sprintf("响应处理完成: %s [%d -> %d] %s, 响应头数量: %d, 耗时: %dms",
-			originalURL, originalStatus, finalStatus, title, len(responseHeaders), duration))
-	} else {
-		logger.Debug(fmt.Sprintf("响应处理完成: %s [%d] %s, 响应头数量: %d, 耗时: %dms",
-			originalURL, originalStatus, title, len(responseHeaders), duration))
-	}
+	logger.Debug(fmt.Sprintf("响应处理完成: %s [%d] %s, 响应头数量: %d, 耗时: %dms",
+		url, resp.StatusCode(), title, len(responseHeaders), duration))
 
 	return response, nil
 }
@@ -946,18 +892,11 @@ func (rp *RequestProcessor) extractServerInfoSafely(url string, resp *fasthttp.R
 }
 
 // buildResponseObject 构建响应对象
-func (rp *RequestProcessor) buildResponseObject(originalURL, finalURL string, statusChain []int, title string, contentLength int64, contentType, body string, responseHeaders, requestHeaders map[string][]string, server string, duration int64) *interfaces.HTTPResponse {
-	originalStatus := 0
-	finalStatus := 0
-	if len(statusChain) > 0 {
-		originalStatus = statusChain[0]
-		finalStatus = statusChain[len(statusChain)-1]
-	}
+func (rp *RequestProcessor) buildResponseObject(url string, resp *fasthttp.Response, title string, contentLength int64, contentType, body string, responseHeaders, requestHeaders map[string][]string, server string, duration int64) *interfaces.HTTPResponse {
 	return &interfaces.HTTPResponse{
-		URL:             originalURL,
+		URL:             url,
 		Method:          "GET",
-		StatusCode:      originalStatus,
-		FinalStatusCode: finalStatus,
+		StatusCode:      resp.StatusCode(),
 		Title:           title,
 		ContentLength:   contentLength,
 		ContentType:     contentType,
@@ -965,13 +904,11 @@ func (rp *RequestProcessor) buildResponseObject(originalURL, finalURL string, st
 		ResponseHeaders: responseHeaders,
 		RequestHeaders:  requestHeaders,
 		Server:          server,
-		IsDirectory:     rp.isDirectoryURL(originalURL),
+		IsDirectory:     rp.isDirectoryURL(url),
 		Length:          contentLength,
 		Duration:        duration,
 		Depth:           0,    // 深度信息需要外部设置
 		ResponseBody:    body, // 报告用响应体
-		FinalURL:        finalURL,
-		RedirectChain:   append([]int(nil), statusChain...),
 	}
 }
 
@@ -1306,183 +1243,6 @@ func (rp *RequestProcessor) isRedirectError(err error) bool {
 }
 
 // ============================================================================
-// HTTP重定向处理相关方法（重定向修复）
-// ============================================================================
-
-// findLocationHeader 查找Location头（大小写不敏感）
-func (rp *RequestProcessor) findLocationHeader(resp *fasthttp.Response) string {
-	// 尝试标准的Location头
-	if location := string(resp.Header.Peek("Location")); location != "" {
-		return location
-	}
-
-	// 尝试小写的location头
-	if location := string(resp.Header.Peek("location")); location != "" {
-		return location
-	}
-
-	// 遍历所有头部查找location相关的头（最后的保险）
-	var foundLocation string
-	resp.Header.VisitAll(func(key, value []byte) {
-		if strings.ToLower(string(key)) == "location" {
-			foundLocation = string(value)
-		}
-	})
-
-	return foundLocation
-}
-
-// resolveRedirectURL 解析相对路径重定向URL（URL拼接修复）
-func (rp *RequestProcessor) resolveRedirectURL(baseURL, location string) (string, error) {
-	// URL拼接修复：智能处理基础URL标准化
-	normalizedBaseURL := rp.normalizeBaseURL(baseURL, location)
-
-	base, err := url.Parse(normalizedBaseURL)
-	if err != nil {
-		return "", fmt.Errorf("解析基础URL失败: %v", err)
-	}
-
-	redirect, err := url.Parse(location)
-	if err != nil {
-		return "", fmt.Errorf("解析重定向URL失败: %v", err)
-	}
-
-	// 解析相对URL
-	resolved := base.ResolveReference(redirect)
-	return resolved.String(), nil
-}
-
-// normalizeBaseURL 标准化基础URL（URL拼接修复）
-func (rp *RequestProcessor) normalizeBaseURL(baseURL, location string) string {
-	// 如果是查询参数形式的重定向，确保基础URL有正确的路径
-	if rp.isQueryOnlyRedirect(location) {
-		parsed, err := url.Parse(baseURL)
-		if err != nil {
-			return baseURL // 解析失败，返回原URL
-		}
-
-		// 如果路径为空，添加根路径斜杠
-		if parsed.Path == "" {
-			parsed.Path = "/"
-			logger.Debugf("URL路径标准化: %s -> %s", baseURL, parsed.String())
-			return parsed.String()
-		}
-
-		// 如果路径不以斜杠结尾且没有文件扩展名，添加斜杠
-		if !strings.HasSuffix(parsed.Path, "/") && !rp.pathHasFileExtension(parsed.Path) {
-			parsed.Path += "/"
-			logger.Debugf("URL路径标准化: %s -> %s", baseURL, parsed.String())
-			return parsed.String()
-		}
-	}
-
-	return baseURL // 不需要标准化，返回原URL
-}
-
-// isQueryOnlyRedirect 检测是否为查询参数形式的相对重定向（URL拼接修复）
-func (rp *RequestProcessor) isQueryOnlyRedirect(location string) bool {
-	return strings.HasPrefix(location, "?")
-}
-
-// pathHasFileExtension 检测路径是否包含文件扩展名（URL拼接修复）
-func (rp *RequestProcessor) pathHasFileExtension(path string) bool {
-	// 获取路径的最后一部分
-	lastPart := path
-	if slashIndex := strings.LastIndex(path, "/"); slashIndex != -1 {
-		lastPart = path[slashIndex+1:]
-	}
-
-	// 检查是否包含点号（文件扩展名的标志）
-	return strings.Contains(lastPart, ".")
-}
-
-// isRedirectStatus 检查是否为重定向状态码
-func (rp *RequestProcessor) isRedirectStatus(statusCode int) bool {
-	return statusCode >= 300 && statusCode < 400
-}
-
-// followRedirectManually 手动跟随重定向（重定向修复）
-func (rp *RequestProcessor) followRedirectManually(originalURL string, maxRedirects int) (*fasthttp.Response, error) {
-	currentURL := originalURL
-
-	for i := 0; i < maxRedirects; i++ {
-		// 创建新的请求
-		req := fasthttp.AcquireRequest()
-		resp := fasthttp.AcquireResponse()
-		defer fasthttp.ReleaseRequest(req)
-
-		// 设置请求
-		rp.setupRequest(req, currentURL)
-
-		// 发起请求（不跟随重定向）
-		err := rp.client.DoTimeout(req, resp, rp.config.Timeout)
-		if err != nil {
-			fasthttp.ReleaseResponse(resp)
-			return nil, fmt.Errorf("请求失败: %v", err)
-		}
-
-		// 检查是否为重定向状态码
-		if !rp.isRedirectStatus(resp.StatusCode()) {
-			logger.Debugf("手动重定向完成: %s [%d]", currentURL, resp.StatusCode())
-			return resp, nil // 不是重定向，返回最终响应
-		}
-
-		// 查找Location头
-		location := rp.findLocationHeader(resp)
-		if location == "" {
-			fasthttp.ReleaseResponse(resp)
-			return nil, fmt.Errorf("重定向响应缺少Location头")
-		}
-
-		// 解析重定向URL
-		redirectURL, err := rp.resolveRedirectURL(currentURL, location)
-		if err != nil {
-			fasthttp.ReleaseResponse(resp)
-			return nil, fmt.Errorf("解析重定向URL失败: %v", err)
-		}
-
-		logger.Debugf("🔄 手动跟随重定向 [%d/%d]: %s -> %s",
-			i+1, maxRedirects, currentURL, redirectURL)
-
-		// 更新当前URL
-		currentURL = redirectURL
-
-		// 释放当前响应，准备下一次请求
-		fasthttp.ReleaseResponse(resp)
-	}
-
-	return nil, fmt.Errorf("超过最大重定向次数: %d", maxRedirects)
-}
-
-// setupRequest 设置HTTP请求（重定向修复）
-func (rp *RequestProcessor) setupRequest(req *fasthttp.Request, rawURL string) {
-	// 设置请求URL
-	req.SetRequestURI(rawURL)
-
-	// 设置请求方法
-	req.Header.SetMethod("GET")
-
-	// 使用统一的默认头部设置
-	headers := rp.getDefaultHeaders()
-	for key, value := range headers {
-		if key != "User-Agent" { // User-Agent需要特殊处理
-			req.Header.Set(key, value)
-		}
-	}
-
-	// 设置User-Agent（重定向场景使用固定UA）
-	if len(rp.config.UserAgents) > 0 {
-		req.Header.SetUserAgent(rp.config.UserAgents[0])
-	} else {
-		req.Header.SetUserAgent("veo/1.0")
-	}
-
-	// 设置防缓存头部（重定向场景特有）
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
-}
-
-// ============================================================================
 // 配置相关功能 (原config.go内容)
 // ============================================================================
 
@@ -1520,7 +1280,7 @@ func getDefaultConfig() *RequestConfig {
 		MaxRetries:      retries,
 		UserAgents:      getDefaultUserAgents(),
 		MaxBodySize:     10 * 1024 * 1024, // 10MB
-		FollowRedirect:  true,             // 修复：默认启用重定向跟随，与HTTPClient保持一致
+		FollowRedirect:  false,            // 默认不跟随重定向
 		MaxConcurrent:   maxConcurrent,
 		ConnectTimeout:  connectTimeout,
 		RandomUserAgent: randomUserAgent,
@@ -1560,6 +1320,7 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 	atomic.AddInt64(&stats.ProcessedCount, 1)
 
 	if response != nil {
+		rp.markHostSuccess(response.URL)
 		responsesMu.Lock()
 		*responses = append(*responses, response)
 		responsesMu.Unlock()
@@ -1581,6 +1342,57 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 			rp.statsUpdater.IncrementTimeouts()
 		}
 	}
+}
+
+func (rp *RequestProcessor) ResetConnectionRefusedState() {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	rp.connectionRefusedCountMap = make(map[string]int)
+	rp.blockedHosts = make(map[string]struct{})
+}
+
+func (rp *RequestProcessor) markHostSuccess(rawURL string) {
+	hostKey := rp.extractHostKey(rawURL)
+	if hostKey == "" {
+		return
+	}
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	delete(rp.connectionRefusedCountMap, hostKey)
+	delete(rp.blockedHosts, hostKey)
+}
+
+func (rp *RequestProcessor) isHostBlocked(rawURL string) bool {
+	hostKey := rp.extractHostKey(rawURL)
+	if hostKey == "" {
+		return false
+	}
+	rp.mu.RLock()
+	defer rp.mu.RUnlock()
+	_, blocked := rp.blockedHosts[hostKey]
+	return blocked
+}
+
+func (rp *RequestProcessor) extractHostKey(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	if parsed, err := neturl.Parse(rawURL); err == nil && parsed.Host != "" {
+		return strings.ToLower(parsed.Host)
+	}
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, "//")
+	candidate := trimmed
+	if len(parts) == 2 {
+		candidate = parts[1]
+	}
+	if idx := strings.Index(candidate, "/"); idx != -1 {
+		candidate = candidate[:idx]
+	}
+	return strings.ToLower(candidate)
 }
 
 // finalizeProcessing 完成处理

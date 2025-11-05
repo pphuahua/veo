@@ -2088,10 +2088,6 @@ zabbix:
   dsl:
     - "contains_all(body, 'zabbix','Zabbix SIA')"
 
-列目录:
-  dsl:
-    - "contains(body, 'Index of /')"
-
 禅道:
   dsl:
     - "contains(header, 'zentaosid')"
@@ -3393,3 +3389,25 @@ ureport:
 knife4j-doc:
   dsl:
     - "contains(body, 'We're sorry but knife4j-vue','knife4j-vue')"
+
+海康威视运行管理中心:
+  dsl:
+    - "contains(body, 'tree_main_business@bic_a','tree_main_component@bic','common_picture')"
+    - "icon('/center/static/favicon.ico', 'e05b47d5ce11d2f4182a964255870b76')"
+
+C-Lodop打印服务系统:
+  dsl:
+    - "contains(body, '欢迎使用C-Lodop打印服务系统','CLodopfuncs.js','demoCreateCLodopJSscript')"
+
+惠普打印机:
+  dsl:
+    - "contains(body, 'HP LaserJet','info_deviceStatus.htm')"
+
+Portainer:
+  dsl:
+  - "title('Portainer面板')"
+  - "contains(body, 'portainer.updatePassword','portainer.init.admin','images/logo_alt.png')"
+
+h3c网管系统:
+  dsl:
+  - "contains(body, 'customdir/images/china_logo.jpg','WnmIsLoginDescSupported')"

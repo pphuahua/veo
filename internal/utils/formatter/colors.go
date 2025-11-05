@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"runtime"
 	"strings"
@@ -33,19 +32,13 @@ const (
 	ColorUnder  = "\033[4m"  // 下划线
 
 	// 保留的颜色常量（用于其他功能）
-	ColorCyan        = "\033[36m" // 青色（保留用于其他功能）
-	ColorWhite       = "\033[37m" // 白色（保留用于其他功能）
-	ColorMagenta     = "\033[35m" // 紫色（保留用于其他功能）
-	ColorGray        = "\033[90m" // 灰色（保留用于其他功能）
-	ColorDim         = "\033[2m"  // 暗淡（用于DSL规则显示）
-	ColorLightBlue   = "\033[94m" // 浅蓝色（保留用于其他功能）
-	ColorBrightWhite = "\033[97m" // 亮白色（保留用于其他功能）
+	ColorMagenta = "\033[35m" // 紫色（保留用于其他功能）
+	ColorGray    = "\033[90m" // 灰色（保留用于其他功能）
+	ColorDim     = "\033[2m"  // 暗淡（用于DSL规则显示）
 
 	// URL专用颜色常量
-	ColorPurpleBlue         = "\033[38;2;88;94;170m" // 紫蓝色 (#585eaa) - 24位真彩色
-	ColorPurpleBlueFallback = "\033[94m"             // 紫蓝色降级方案 - 浅蓝色（16色兼容）
-	ColorDarkGreen          = "\033[38;2;46;125;50m" // 深绿色 (#2e7d32) - 24位真彩色
-	ColorDarkGreenFallback  = "\033[32m"             // 深绿色降级方案 - 标准绿色（16色兼容）
+	ColorDarkGreen         = "\033[38;2;46;125;50m" // 深绿色 (#2e7d32) - 24位真彩色
+	ColorDarkGreenFallback = "\033[32m"             // 深绿色降级方案 - 标准绿色（16色兼容）
 )
 
 // FormatURL 格式化URL显示（使用深绿色）
@@ -212,26 +205,17 @@ func FormatFingerprintTag(tag string) string {
 	return color + tag + ColorReset
 }
 
-// FormatValidResult 格式化有效结果显示（目录扫描专用）
-// 将有效的扫描结果使用加粗显示，增强视觉效果
-func FormatValidResult(url string) string {
-	if !shouldUseColors() {
-		return url // 如果禁用彩色输出，直接返回URL
-	}
-	// 有效结果使用加粗显示
-	return ColorBold + url + ColorReset
-}
-
 // FormatBold 将文本加粗显示（若启用颜色）
 // 参数：
 //   - s: 原始文本
+//
 // 返回：
 //   - string: 加粗后的文本（或原文本，当颜色禁用时）
 func FormatBold(s string) string {
-    if !shouldUseColors() {
-        return s
-    }
-    return ColorBold + s + ColorReset
+	if !shouldUseColors() {
+		return s
+	}
+	return ColorBold + s + ColorReset
 }
 
 // FormatSnippetArrow 返回用于指纹匹配片段前缀的箭头（加粗绿色高亮）
@@ -239,22 +223,17 @@ func FormatBold(s string) string {
 // 参数：无
 // 返回：带颜色（或不带颜色）的箭头字符串
 func FormatSnippetArrow() string {
-    arrow := "➜ "
-    if !shouldUseColors() {
-        return arrow
-    }
-    return ColorBold + ColorGreen + arrow + ColorReset
+	arrow := "➜ "
+	if !shouldUseColors() {
+		return arrow
+	}
+	return ColorBold + ColorGreen + arrow + ColorReset
 }
 
 // FormatFingerprintMatch 已废弃：统一使用FormatFingerprintName函数
 // Deprecated: 为了保持主动扫描和被动扫描的输出格式一致，
 // 现在统一使用FormatFingerprintName函数，该函数提供加粗显示效果
 // 此函数保留仅为向后兼容，实际调用FormatFingerprintName
-func FormatFingerprintMatch(fingerprintName string) string {
-	// 重定向到FormatFingerprintName以保持一致性
-	return FormatFingerprintName(fingerprintName)
-}
-
 // shouldUseColors 检查是否应该使用颜色
 // 返回: 布尔值表示是否使用颜色（配置允许且平台支持）
 func shouldUseColors() bool {
@@ -313,58 +292,6 @@ func ColorsEnabled() bool {
 	return atomic.LoadInt32(&globalColorEnabled) == 1
 }
 
-// getPurpleBlueColor 获取紫蓝色颜色代码（支持降级）
-// 返回适合当前终端环境的紫蓝色ANSI代码
-func getPurpleBlueColor() string {
-	if !shouldUseColors() {
-		return "" // 如果禁用彩色输出，返回空字符串
-	}
-
-	// 检查是否支持24位真彩色
-	if supportsTrueColor() {
-		return ColorPurpleBlue // 使用24位真彩色
-	}
-
-	// 降级到16色方案
-	return ColorPurpleBlueFallback
-}
-
-// supportsTrueColor 检测终端是否支持24位真彩色
-// 通过检查环境变量和终端类型来判断
-func supportsTrueColor() bool {
-	// 检查COLORTERM环境变量
-	colorterm := os.Getenv("COLORTERM")
-	if colorterm == "truecolor" || colorterm == "24bit" {
-		return true
-	}
-
-	// 检查TERM环境变量
-	term := os.Getenv("TERM")
-	if strings.Contains(term, "256color") || strings.Contains(term, "truecolor") {
-		return true
-	}
-
-	// 检查一些已知支持真彩色的终端
-	knownTrueColorTerms := []string{
-		"xterm-256color",
-		"screen-256color",
-		"tmux-256color",
-		"alacritty",
-		"kitty",
-		"iterm2",
-		"vscode",
-	}
-
-	for _, knownTerm := range knownTrueColorTerms {
-		if strings.Contains(term, knownTerm) {
-			return true
-		}
-	}
-
-	// 默认情况下，假设不支持真彩色
-	return false
-}
-
 // getDarkGreenColor 获取深绿色颜色代码（支持降级）
 // 返回适合当前终端环境的深绿色ANSI代码
 func getDarkGreenColor() string {
@@ -389,16 +316,6 @@ func getDarkGreenColor() string {
 // ============================================================================
 // 目录扫描指纹识别专用格式化函数
 // ============================================================================
-
-// FormatFingerprint 格式化指纹名称（用于目录扫描结果的指纹显示）
-// 使用黄色高亮显示指纹名称
-func FormatFingerprint(name string) string {
-	if !shouldUseColors() {
-		return name // 如果禁用彩色输出，直接返回指纹名称
-	}
-	// 使用黄色显示指纹名称
-	return ColorYellow + name + ColorReset
-}
 
 // FormatDSL 格式化DSL表达式（用于目录扫描结果的DSL显示）
 // 使用灰色显示DSL表达式，并截断过长的内容

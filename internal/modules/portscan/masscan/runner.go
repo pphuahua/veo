@@ -400,6 +400,7 @@ type targetGroup struct {
 
 func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 	const batchSize = 64
+	const maxGroups = 4
 	cleanup := func() {}
 
 	if strings.TrimSpace(opts.TargetFile) != "" {
@@ -415,10 +416,14 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 		if len(lines) <= batchSize {
 			return []*targetGroup{{count: len(lines), filePath: filePath}}, cleanup, nil
 		}
+		chunkSize := (len(lines) + maxGroups - 1) / maxGroups
+		if chunkSize > batchSize {
+			chunkSize = batchSize
+		}
 		var tempFiles []string
 		groups := make([]*targetGroup, 0)
-		for i := 0; i < len(lines); i += batchSize {
-			end := i + batchSize
+		for i := 0; i < len(lines); i += chunkSize {
+			end := i + chunkSize
 			if end > len(lines) {
 				end = len(lines)
 			}
@@ -446,8 +451,9 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 	}
 
 	var (
-		tempFiles []string
-		groups    []*targetGroup
+		tempFiles     []string
+		groups        []*targetGroup
+		targetBatches [][]string
 	)
 
 	emitBatch := func(batch []string) error {
@@ -458,12 +464,7 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 			groups = append(groups, &targetGroup{count: 1, targetArg: batch[0]})
 			return nil
 		}
-		fp, err := writeTargetsToTemp(batch)
-		if err != nil {
-			return err
-		}
-		tempFiles = append(tempFiles, fp)
-		groups = append(groups, &targetGroup{count: len(batch), filePath: fp})
+		targetBatches = append(targetBatches, append([]string(nil), batch...))
 		return nil
 	}
 
@@ -493,8 +494,42 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 		}
 	}
 
-	if len(groups) == 0 {
+	if len(targetBatches) == 0 && len(groups) == 0 {
 		return nil, cleanup, fmt.Errorf("未生成有效目标分组")
+	}
+
+	if len(targetBatches) > 0 {
+		chunkSize := (len(targetBatches) + maxGroups - 1) / maxGroups
+		if chunkSize <= 0 {
+			chunkSize = 1
+		}
+		batched := make([][]string, 0)
+		current := make([]string, 0)
+		for _, batch := range targetBatches {
+			current = append(current, batch...)
+			if len(batched) < maxGroups && len(current) >= chunkSize {
+				batched = append(batched, current)
+				current = []string{}
+			}
+		}
+		if len(current) > 0 {
+			batched = append(batched, current)
+		}
+		for _, batch := range batched {
+			if len(batch) == 1 {
+				groups = append(groups, &targetGroup{count: 1, targetArg: batch[0]})
+				continue
+			}
+			fp, err := writeTargetsToTemp(batch)
+			if err != nil {
+				for _, f := range tempFiles {
+					_ = os.Remove(f)
+				}
+				return nil, cleanup, err
+			}
+			tempFiles = append(tempFiles, fp)
+			groups = append(groups, &targetGroup{count: len(batch), filePath: fp})
+		}
 	}
 
 	cleanup = func() {

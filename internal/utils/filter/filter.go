@@ -551,15 +551,6 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 
 		var messageBuilder strings.Builder
 		messageBuilder.WriteString(baseInfo)
-		if page.FinalStatusCode > 0 && page.FinalStatusCode != page.StatusCode {
-			messageBuilder.WriteString(" -> ")
-			messageBuilder.WriteString(formatStatusCode(page.FinalStatusCode))
-			finalURL := strings.TrimSpace(page.FinalURL)
-			if finalURL != "" && !strings.EqualFold(strings.TrimRight(finalURL, "/"), strings.TrimRight(page.URL, "/")) {
-				messageBuilder.WriteString(" ")
-				messageBuilder.WriteString(formatURL(finalURL))
-			}
-		}
 		if fingerprintStr != "" {
 			messageBuilder.WriteString(" ")
 			messageBuilder.WriteString(fingerprintStr)

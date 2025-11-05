@@ -38,8 +38,7 @@ type ResponseFilterInterface interface {
 type HTTPResponse struct {
 	URL             string              `json:"url"`                      // 请求的URL
 	Method          string              `json:"method"`                   // 请求方法
-	StatusCode      int                 `json:"status_code"`              // 首次响应的HTTP状态码
-	FinalStatusCode int                 `json:"final_status_code"`        // 最终响应的HTTP状态码（跟随重定向后）
+	StatusCode      int                 `json:"status_code"`              // HTTP状态码
 	Title           string              `json:"title"`                    // 页面标题
 	ContentLength   int64               `json:"content_length"`           // 内容长度
 	ContentType     string              `json:"content_type"`             // 内容类型
@@ -53,9 +52,6 @@ type HTTPResponse struct {
 	Depth           int                 `json:"depth"`                    // 扫描深度
 	ResponseBody    string              `json:"response_body"`            // 响应体内容（报告用）
 	Fingerprints    []FingerprintMatch  `json:"fingerprints,omitempty"`   // 匹配到的指纹信息
-	FinalURL        string              `json:"final_url,omitempty"`      // 最终访问的URL（重定向后）
-	RedirectChain   []int               `json:"redirect_chain,omitempty"` // 重定向链中的状态码
-	Redirected      bool                `json:"redirected,omitempty"`     // 是否发生重定向
 }
 
 // FilterResult 过滤结果结构体

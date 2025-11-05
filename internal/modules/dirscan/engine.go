@@ -297,16 +297,12 @@ func (e *Engine) convertToFilterResponses(httpResponses []*interfaces.HTTPRespon
 		// 内存优化：只复制过滤器真正需要的4个核心字段
 		// 分析过滤器实现发现只需要：URL、StatusCode、ContentLength、ContentType、Title、Body
 		filterResponses[i] = interfaces.HTTPResponse{
-			URL:             resp.URL,        // 结果展示需要
-			StatusCode:      resp.StatusCode, // 状态码过滤器使用
-			FinalStatusCode: resp.FinalStatusCode,
-			FinalURL:        resp.FinalURL,
-			RedirectChain:   append([]int(nil), resp.RedirectChain...),
-			Redirected:      resp.Redirected,
-			ContentLength:   resp.ContentLength,         // 哈希过滤器容错计算使用
-			ContentType:     resp.ContentType,           // Content-Type过滤器使用
-			Title:           resp.Title,                 // 哈希过滤器生成页面哈希使用
-			Body:            e.getFilterBody(resp.Body), // 哈希计算使用（已截断）
+			URL:           resp.URL,                   // 结果展示需要
+			StatusCode:    resp.StatusCode,            // 状态码过滤器使用
+			ContentLength: resp.ContentLength,         // 哈希过滤器容错计算使用
+			ContentType:   resp.ContentType,           // Content-Type过滤器使用
+			Title:         resp.Title,                 // 哈希过滤器生成页面哈希使用
+			Body:          e.getFilterBody(resp.Body), // 哈希计算使用（已截断）
 			// 内存优化：其他字段使用零值，大幅减少内存占用
 			// Method、Server、IsDirectory、Length、Duration、Depth等字段在过滤器中未使用
 		}
