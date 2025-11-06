@@ -11,6 +11,7 @@ import (
 	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/logger"
+	"veo/internal/core/useragent"
 )
 
 // ConnectivityChecker 连通性检测器
@@ -78,7 +79,11 @@ func (cc *ConnectivityChecker) isReachableWithRedirect(targetURL string, maxRedi
 	}
 
 	// 设置请求头
-	req.Header.Set("User-Agent", "veo-Connectivity/1.0")
+	ua := useragent.Pick()
+	if ua == "" {
+		ua = "veo-Connectivity/1.0"
+	}
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "*/*")
 
 	// 发送请求

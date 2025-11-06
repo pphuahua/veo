@@ -6,6 +6,7 @@ import (
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/utils/filter"
+	requests "veo/internal/utils/processor"
 )
 
 // ===========================================
@@ -49,11 +50,12 @@ type Statistics struct {
 
 // Engine 目录扫描引擎
 type Engine struct {
-	config         *EngineConfig
-	stats          *Statistics
-	mu             sync.RWMutex
-	lastScanResult *ScanResult
-	filterConfig   *filter.FilterConfig
+	config           *EngineConfig
+	stats            *Statistics
+	mu               sync.RWMutex
+	lastScanResult   *ScanResult
+	filterConfig     *filter.FilterConfig
+	requestProcessor *requests.RequestProcessor
 }
 
 // ScanStatus 扫描状态

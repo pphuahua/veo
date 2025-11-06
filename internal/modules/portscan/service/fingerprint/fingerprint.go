@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"veo/internal/core/logger"
+	"veo/internal/core/useragent"
 )
 
 type Action uint8
@@ -119,7 +120,7 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 					continue
 				}
 				for _, rule := range serviceRules[service].DataGroup {
-					if matchRuleWithBuf(buf[:n], ip, _port, rule) {
+					if matchRuleWithBuf(buf[:n], ip, _port, rule, "") {
 						return service, banner, false
 					}
 				}
@@ -163,11 +164,16 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 	return unknown, banner, false
 }
 
-func matchRuleWithBuf(buf, ip net.IP, _port uint16, rule ruleData) bool {
+func matchRuleWithBuf(buf, ip net.IP, _port uint16, rule ruleData, ua string) bool {
 	data := []byte("")
 	if rule.Data != nil {
 		data = bytes.Replace(rule.Data, []byte("{IP}"), []byte(ip.String()), -1)
 		data = bytes.Replace(data, []byte("{PORT}"), []byte(strconv.Itoa(int(_port))), -1)
+		if ua != "" {
+			data = bytes.Replace(data, []byte("{UA}"), []byte(ua), -1)
+		} else {
+			data = bytes.Replace(data, []byte("{UA}"), []byte{}, -1)
+		}
 	}
 	if rule.Regexps != nil {
 		for _, _regex := range rule.Regexps {
@@ -192,6 +198,11 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 
 	serviceRule2 := serviceRules[serviceName]
 	flowsService := groupFlows[serviceName]
+
+	userAgent := useragent.Pick()
+	if userAgent == "" {
+		userAgent = useragent.Primary()
+	}
 
 	if serviceRule2.Tls {
 		connTls, err = tls.DialWithDialer(&net.Dialer{Timeout: dailTimeout}, network, address, &tls.Config{
@@ -230,6 +241,11 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 		if rule.Data != nil {
 			data = bytes.Replace(rule.Data, []byte("{IP}"), []byte(ip.String()), -1)
 			data = bytes.Replace(data, []byte("{PORT}"), []byte(strconv.Itoa(int(_port))), -1)
+			if userAgent != "" {
+				data = bytes.Replace(data, []byte("{UA}"), []byte(userAgent), -1)
+			} else {
+				data = bytes.Replace(data, []byte("{UA}"), []byte{}, -1)
+			}
 		}
 
 		if rule.Action == ActionSend {
@@ -256,7 +272,7 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 			banner = make([]byte, n)
 			copy(banner, buf[:n])
 			logger.Debugf("recv banner %s:%d (%s) => %q", ip.String(), _port, serviceName, previewBanner(buf[:n]))
-			if matchRuleWithBuf(buf[:n], ip, _port, rule) {
+			if matchRuleWithBuf(buf[:n], ip, _port, rule, userAgent) {
 				serviceNameRet = serviceName
 				logger.Debugf("exact match service=%s banner=%q", serviceName, previewBanner(buf[:n]))
 				return
@@ -266,7 +282,7 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 					if rule2.Action == ActionSend {
 						continue
 					}
-					if matchRuleWithBuf(buf[:n], ip, _port, rule2) {
+					if matchRuleWithBuf(buf[:n], ip, _port, rule2, userAgent) {
 						logger.Debugf("group match service=%s banner=%q", s, previewBanner(buf[:n]))
 						serviceNameRet = s
 						return

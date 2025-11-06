@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"veo/internal/core/logger"
+	"veo/internal/core/useragent"
 	portscanpkg "veo/internal/modules/portscan"
 	localfingerprint "veo/internal/modules/portscan/service/fingerprint"
 )
@@ -178,7 +179,11 @@ func fallbackHTTP(host string, port int, timeout time.Duration) bool {
 	if port != 80 && port != 0 {
 		requestHost = fmt.Sprintf("%s:%d", host, port)
 	}
-	req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Moziilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0\r\nAccept: */*\r\nConnection: close\r\n\r\n", requestHost)
+	ua := useragent.Pick()
+	if ua == "" {
+		ua = "veo-HTTPClient/1.0"
+	}
+	req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n", requestHost, ua)
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return false
 	}

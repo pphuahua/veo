@@ -199,16 +199,17 @@ func (e *Engine) performHTTPRequests(scanURLs []string) ([]*interfaces.HTTPRespo
 
 // getOrCreateRequestProcessor 获取或创建请求处理器
 func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
-	logger.Debug("创建新的请求处理器")
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	// 创建新的请求处理器实例
-	processor := requests.NewRequestProcessor(nil)
+	if e.requestProcessor == nil {
+		logger.Debug("创建新的请求处理器")
+		e.requestProcessor = requests.NewRequestProcessor(nil)
+		logger.Debug("准备应用自定义HTTP头部")
+		e.applyCustomHeadersToProcessor(e.requestProcessor)
+	}
 
-	// 应用CLI指定的自定义HTTP头部
-	logger.Debug("准备应用自定义HTTP头部")
-	e.applyCustomHeadersToProcessor(processor)
-
-	return processor
+	return e.requestProcessor
 }
 
 // applyCustomHeadersToProcessor 应用自定义HTTP头部到请求处理器
@@ -232,9 +233,11 @@ func (e *Engine) applyCustomHeadersToProcessor(processor *requests.RequestProces
 // getActualConcurrency 获取实际的并发数（用于日志显示）
 func (e *Engine) getActualConcurrency() int {
 	// 使用默认配置的并发数
-	defaultConfig := requests.NewRequestProcessor(nil).GetConfig()
-	if defaultConfig != nil {
-		return defaultConfig.MaxConcurrent
+	processor := e.getOrCreateRequestProcessor()
+	if processor != nil {
+		if cfg := processor.GetConfig(); cfg != nil && cfg.MaxConcurrent > 0 {
+			return cfg.MaxConcurrent
+		}
 	}
 
 	// 最后的备用值

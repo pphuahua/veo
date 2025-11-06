@@ -9,6 +9,7 @@ import (
 	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/logger"
+	"veo/internal/core/useragent"
 )
 
 // ===========================================
@@ -39,11 +40,16 @@ type Config struct {
 
 // DefaultConfig 获取默认HTTP客户端配置（安全扫描优化版）
 func DefaultConfig() *Config {
+	ua := useragent.Pick()
+	if ua == "" {
+		ua = "veo-HTTPClient/1.0"
+	}
+
 	return &Config{
 		Timeout:        10 * time.Second,
 		FollowRedirect: true, // 默认跟随重定向
 		MaxRedirects:   5,    // 最大5次重定向
-		UserAgent:      "veo-HTTPClient/1.0",
+		UserAgent:      ua,
 		SkipTLSVerify:  true,            // 网络安全扫描工具常用设置
 		TLSTimeout:     5 * time.Second, // TLS握手超时
 	}

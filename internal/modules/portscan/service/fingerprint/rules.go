@@ -52,7 +52,7 @@ func init() {
 		DataGroup: []ruleData{
 			{
 				ActionSend,
-				[]byte("HEAD / HTTP/1.1\r\nHost: {IP}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:91.0) Gecko/20100101 Firefox/91.0\r\nAccept: */*\r\nAccept-Language: en\r\nAccept-Encoding: deflate\r\n\r\n"),
+				[]byte("HEAD / HTTP/1.1\r\nHost: {IP}\r\nUser-Agent: {UA}\r\nAccept: */*\r\nAccept-Language: en\r\nAccept-Encoding: deflate\r\n\r\n"),
 				nil,
 			},
 			{

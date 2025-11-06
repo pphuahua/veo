@@ -14,6 +14,7 @@ import (
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	modulepkg "veo/internal/core/module"
+	"veo/internal/core/useragent"
 	"veo/internal/modules/fingerprint"
 	portscanpkg "veo/internal/modules/portscan"
 	masscanrunner "veo/internal/modules/portscan/masscan"
@@ -1700,7 +1701,16 @@ func (sc *ScanController) performPathProbing(targets []string) {
 // createHTTPClientAdapter 创建HTTP客户端（支持TLS和重定向）
 func (sc *ScanController) createHTTPClientAdapter() httpclient.HTTPClientInterface {
 	// 使用HTTP客户端工厂（代码质量优化）
-	userAgent := "Moziilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
+	userAgent := ""
+	if sc.requestProcessor != nil {
+		userAgent = sc.requestProcessor.GetUserAgent()
+	}
+	if userAgent == "" {
+		userAgent = useragent.Primary()
+	}
+	if userAgent == "" {
+		userAgent = "veo-HTTPClient/1.0"
+	}
 	return httpclient.CreateClientWithUserAgent(userAgent)
 }
 

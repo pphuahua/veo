@@ -122,11 +122,6 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("服务器监听地址不能为空")
 	}
 
-	// 验证请求配置
-	if config.Addon.Request.Timeout <= 0 {
-		return fmt.Errorf("请求超时时间必须大于0")
-	}
-
 	// 验证代理配置
 	if config.Addon.Proxy.ConnectTimeout <= 0 {
 		return fmt.Errorf("代理连接超时时间必须大于0")

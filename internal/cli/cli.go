@@ -90,6 +90,9 @@ type CLIArgs struct {
 
 	// 新增：相似页面过滤容错阈值参数
 	FilterTolerance int // 相似页面过滤容错阈值 (--filter-tolerance)
+
+	// 新增：随机User-Agent控制
+	RandomUA bool // 是否启用随机User-Agent (-ua, 默认启用)
 }
 
 // ValidModules 有效的模块列表（使用module包的类型定义）
@@ -227,6 +230,9 @@ func ParseCLIArgs() *CLIArgs {
 		// 新增：相似页面过滤容错阈值参数（-1表示使用默认值）
 		filterTolerance = flag.Int("filter", -1, "相似页面过滤容错阈值(字节)，值越大过滤越严格 (默认: 50, 范围: 0-500, 0表示禁用过滤)")
 
+		// 新增：随机User-Agent控制
+		randomUAFlag = flag.Bool("ua", true, "是否启用随机User-Agent池 (默认: true，可通过 -ua=false 关闭)")
+
 		help     = flag.Bool("h", false, "显示帮助信息")
 		helpLong = flag.Bool("help", false, "显示帮助信息")
 	)
@@ -276,6 +282,9 @@ func ParseCLIArgs() *CLIArgs {
 
 		// 新增：相似页面过滤容错阈值参数
 		FilterTolerance: *filterTolerance,
+
+		// 新增：随机User-Agent控制
+		RandomUA: *randomUAFlag,
 	}
 
 	if *targetsStr != "" {
@@ -361,6 +370,7 @@ veo - 端口扫描/指纹识别/目录扫描
   -vv                  指纹识别输出匹配片段
   -nc                  禁用彩色输出
   --json               控制台输出 JSON
+  -ua bool             是否启用随机User-Agent 池 (默认 true，使用 -ua=false 关闭)
 
 性能调优:
   -t, --threads int    全局并发线程数（默认 200）
@@ -719,6 +729,13 @@ func applyArgsToConfig(args *CLIArgs) {
 
 	// 应用新的CLI参数到配置
 	requestConfig := config.GetRequestConfig()
+	randomUA := args.RandomUA
+	requestConfig.RandomUA = &randomUA
+	if args.RandomUA {
+		logger.Debug("CLI参数覆盖：随机User-Agent池已启用")
+	} else {
+		logger.Debug("CLI参数覆盖：随机User-Agent池已禁用")
+	}
 
 	// 应用线程并发数量（如果指定）
 	if args.Threads > 0 {

@@ -14,6 +14,7 @@ import (
 	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
+	"veo/internal/core/useragent"
 	"veo/internal/utils/auth"
 	"veo/internal/utils/shared"
 	"veo/proxy"
@@ -1275,10 +1276,15 @@ func getDefaultConfig() *RequestConfig {
 
 	delay := time.Duration(0) // 移除延迟配置，统一为0
 
+	userAgents := useragent.GetEffectiveList()
+	if len(userAgents) == 0 {
+		userAgents = useragent.DefaultList()
+	}
+
 	return &RequestConfig{
 		Timeout:         timeout,
 		MaxRetries:      retries,
-		UserAgents:      getDefaultUserAgents(),
+		UserAgents:      userAgents,
 		MaxBodySize:     10 * 1024 * 1024, // 10MB
 		FollowRedirect:  false,            // 默认不跟随重定向
 		MaxConcurrent:   maxConcurrent,
@@ -1421,37 +1427,29 @@ func (rp *RequestProcessor) logProcessingResults(stats *ProcessingStats) {
 
 // initializeUserAgentPool 初始化UserAgent池
 func initializeUserAgentPool(config *RequestConfig) []string {
-	// 从配置文件获取UserAgent列表
-	configUserAgents := loadUserAgentsFromConfig()
-	if len(configUserAgents) > 0 {
-		logger.Debug(fmt.Sprintf("从配置文件加载了 %d 个UserAgent", len(configUserAgents)))
-		return configUserAgents
+	effective := useragent.GetEffectiveList()
+	if len(effective) == 0 {
+		logger.Debug("未找到有效的User-Agent列表，返回空列表")
+		return effective
 	}
 
-	// 如果配置文件中没有UserAgent，使用默认列表
-	defaultUserAgents := getDefaultUserAgents()
-	logger.Debug(fmt.Sprintf("使用默认UserAgent列表，共 %d 个", len(defaultUserAgents)))
-	return defaultUserAgents
+	if config != nil && !config.RandomUserAgent {
+		logger.Debug("随机User-Agent已禁用，使用固定User-Agent")
+		return []string{effective[0]}
+	}
+
+	logger.Debug(fmt.Sprintf("加载User-Agent列表，共 %d 个", len(effective)))
+	return effective
 }
 
 // loadUserAgentsFromConfig 从配置文件加载UserAgent列表
 func loadUserAgentsFromConfig() []string {
-	cfg := config.GetRequestConfig()
-	return cfg.UserAgents
+	return useragent.GetConfiguredList()
 }
 
 // getDefaultUserAgents 获取默认UserAgent列表
 func getDefaultUserAgents() []string {
-	return []string{
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
-		"Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-	}
+	return useragent.DefaultList()
 }
 
 // updateUserAgentPool 更新UserAgent池
@@ -1474,7 +1472,7 @@ func (rp *RequestProcessor) getRandomUserAgent() string {
 	defer rp.mu.RUnlock()
 
 	if len(rp.userAgentPool) == 0 {
-		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+		return useragent.Primary()
 	}
 
 	if !rp.config.RandomUserAgent {
@@ -1483,6 +1481,11 @@ func (rp *RequestProcessor) getRandomUserAgent() string {
 
 	index := rand.Intn(len(rp.userAgentPool))
 	return rp.userAgentPool[index]
+}
+
+// GetUserAgent 返回当前配置下的User-Agent（供外部HTTP客户端复用）
+func (rp *RequestProcessor) GetUserAgent() string {
+	return rp.getRandomUserAgent()
 }
 
 // ============================================================================
