@@ -37,7 +37,32 @@ jobs:
       - name: Prepare configs directory
         run: |
           mkdir -p configs
-          printf 'server:\n  listen: ":9080"\n\nhosts:\n  allow:\n    - "*"\n  reject: []\n\naddon:\n  collector:\n    GenerationStatusCodes: []\n    static:\n      path: []\n      extensions: []\n  request:\n    user_agents:\n      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"\n  proxy:\n    upstream_proxy: ""\n    stream_largebody: 5242880\n    ssl_insecure: true\n    connect_timeout: 15\n    read_timeout: 15\n' > configs/config.yaml
+          cat <<'EOF' > configs/config.yaml
+          server:
+            listen: ":9080"
+
+          hosts:
+            allow:
+              - "*"
+            reject: []
+
+          addon:
+            collector:
+              GenerationStatusCodes: []
+              static:
+                path: []
+                extensions: []
+            request:
+              user_agents:
+                - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            proxy:
+              upstream_proxy: ""
+              stream_largebody: 5242880
+              ssl_insecure: true
+              connect_timeout: 15
+              read_timeout: 15
+          EOF
+          cp configs/config.yaml config.yaml
 
       - name: Run tests
         run: go test ./...
