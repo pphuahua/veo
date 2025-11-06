@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Prepare configs directory
+        run: |
+          mkdir -p configs
+          cat <<'EOF' > configs/config.yaml
+          server:
+            listen: ":9080"
+
+          hosts:
+            allow:
+              - "*"
+            reject: []
+
+          addon:
+            collector:
+              GenerationStatusCodes: []
+              static:
+                path: []
+                extensions: []
+            request:
+              user_agents:
+                - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            proxy:
+              upstream_proxy: ""
+              stream_largebody: 5242880
+              ssl_insecure: true
+              connect_timeout: 15
+              read_timeout: 15
+          EOF
+          cat configs/config.yaml
+          cp configs/config.yaml config.yaml
+
+      - name: Run tests
+        env:
+          VEO_CONFIG_PATH: ${{ github.workspace }}/configs/config.yaml
+        run: go test ./...
+
+      - name: Build project
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Prepare release notes
+        id: release_notes
+        run: |
+          if [ ! -f release/notes.md ]; then
+            echo "⚠️ release/notes.md not found" >&2
+            exit 1
+          fi
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          cat release/notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Generate version tag
+        id: version
+        run: |
+          if [ -f release/version ]; then
+            version=$(cat release/version | tr -d '\n')
+          else
+            version=$(date -u +"%Y%m%d-%H%M%S")
+          fi
+          echo "tag=v${version}" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: ${{ steps.release_notes.outputs.notes }}
+          draft: false
+          prerelease: false
+          files: dist/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

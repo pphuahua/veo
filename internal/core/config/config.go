@@ -142,6 +142,14 @@ func logConfigSummary(config *Config) {
 
 // InitConfig 初始化配置（自动查找配置文件）
 func InitConfig() error {
+	if customPath := os.Getenv("VEO_CONFIG_PATH"); customPath != "" {
+		if _, err := os.Stat(customPath); err == nil {
+			if _, err := LoadConfig(customPath); err != nil {
+				return fmt.Errorf("加载配置文件 %s 失败: %v", customPath, err)
+			}
+			return nil
+		}
+	}
 	// 尝试多个可能的配置文件路径
 	configPaths := []string{
 		"config.yaml",

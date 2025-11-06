@@ -33,12 +33,8 @@ func DefaultList() []string {
 
 // GetConfiguredList 返回配置文件中定义的User-Agent列表（已清理空白）
 func GetConfiguredList() []string {
-	cfg := config.GetRequestConfig()
-	if cfg == nil {
-		return nil
-	}
-
-	if len(cfg.UserAgents) == 0 {
+	cfg := resolveRequestConfig()
+	if cfg == nil || len(cfg.UserAgents) == 0 {
 		return nil
 	}
 
@@ -64,7 +60,7 @@ func GetEffectiveList() []string {
 
 // IsRandomEnabled 判断是否启用随机User-Agent
 func IsRandomEnabled() bool {
-	cfg := config.GetRequestConfig()
+	cfg := resolveRequestConfig()
 	if cfg != nil && cfg.RandomUA != nil {
 		return *cfg.RandomUA
 	}
@@ -93,4 +89,17 @@ func Pick() string {
 	idx := rng.Intn(len(list))
 	rngMu.Unlock()
 	return list[idx]
+}
+
+func resolveRequestConfig() *config.RequestConfig {
+	if config.GlobalConfig != nil {
+		return &config.GlobalConfig.Addon.Request
+	}
+	if err := config.InitConfig(); err != nil {
+		return nil
+	}
+	if config.GlobalConfig == nil {
+		return nil
+	}
+	return &config.GlobalConfig.Addon.Request
 }
