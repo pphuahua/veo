@@ -84,28 +84,20 @@ func (ts *TargetScheduler) ExecuteConcurrentScan() (map[string][]*interfaces.HTT
 		wg.Add(1)
 		go func(index int, targetURL string) {
 			defer func() {
-				// 修复：添加panic恢复，确保WaitGroup计数正确
 				if r := recover(); r != nil {
 					logger.Errorf("目标处理panic恢复: %v, 目标: %s", r, targetURL)
 				}
 				wg.Done()
 			}()
 
-			// 获取目标信号量（修复：添加超时避免永久阻塞）
+			// 阻塞等待信号量，除非扫描上下文被取消
 			select {
 			case targetSem <- struct{}{}:
 				defer func() {
-					select {
-					case <-targetSem:
-					default:
-						// 信号量已满，不需要释放
-					}
+					<-targetSem
 				}()
 			case <-scanCtx.Done():
 				logger.Debugf("目标 %s: 扫描被取消", targetURL)
-				return
-			case <-time.After(30 * time.Second):
-				logger.Warnf("目标 %s: 获取信号量超时", targetURL)
 				return
 			}
 

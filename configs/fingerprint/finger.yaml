@@ -2160,7 +2160,7 @@ thinkphp:
     - "icon('/favicon.ico', 'f49c4a4bde1eec6c0b80c2277c76e3db')"
     - "contains(header, 'ThinkPHP')"
     - "contains(body, '为API开发设计的高性能框架')"
-    - "contains(body, 'index.php?m=&c=index&')"
+    - "contains(body, 'index.php?m=&c=index&','www.thinkphp.cn','Fast & Simple OOP PHP Framework','<h3>TRACE</h3>','<title>系统发生错误</title>')"
     - "contains(body, '<h1>:(</h1>')"
 
 php:

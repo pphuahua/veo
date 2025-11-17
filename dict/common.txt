@@ -2279,3 +2279,4 @@
 /%76%32%3b%25%30%41/%61%70%69%2d%64%6f%63%73
 /center/login
 /mobile/login/loginByPassword
+/AdminSys/

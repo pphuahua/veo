@@ -471,9 +471,6 @@ func createFingerprintEngine(cfg *FingerprintModuleConfig) (*fingerprintinternal
 		MaxBodySize:     1 * 1024 * 1024,
 		LogMatches:      true,
 	}
-	if cfg != nil && strings.TrimSpace(cfg.RulesPath) != "" {
-		engineCfg.RulesPath = strings.TrimSpace(cfg.RulesPath)
-	}
 
 	engine := fingerprintinternal.NewEngine(engineCfg)
 	if engineCfg.RulesPath != "" {

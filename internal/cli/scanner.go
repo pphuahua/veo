@@ -216,6 +216,7 @@ type ScanController struct {
 	// 缓存最近一次各模块结果（用于合并报告落盘）
 	lastDirscanResults     []interfaces.HTTPResponse
 	lastFingerprintResults []interfaces.HTTPResponse
+	ipHostMapping          map[string][]string
 }
 
 // NewScanController 创建扫描控制器
@@ -314,6 +315,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		reportPath:             strings.TrimSpace(args.Output),
 		wordlistPath:           strings.TrimSpace(args.Wordlist),
 		skipAliveCheck:         args.NoAliveCheck,
+		ipHostMapping:          make(map[string][]string),
 	}
 }
 
@@ -341,6 +343,7 @@ func (sc *ScanController) runActiveMode() error {
 		return fmt.Errorf("没有有效的目标")
 	}
 	sc.rawTargets = rawTargets
+	sc.enrichIPHostMapping(rawTargets)
 
 	if sc.portFirstMode {
 		sc.lastTargets = rawTargets
@@ -505,7 +508,7 @@ func (sc *ScanController) runPortFirstWorkflow(rawTargets []string) error {
 	sc.lastPortExpr = portsExpr
 	sc.lastPortRate = rate
 
-	httpTargets := deriveHTTPRescanTargets(results)
+	httpTargets := deriveHTTPRescanTargets(results, sc.ipHostMapping)
 	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
 	if len(filteredTargets) == 0 {
 		logger.Info("端口扫描未发现 HTTP/HTTPS 服务，无需二轮扫描")
@@ -618,7 +621,7 @@ func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []
 	return results, aggregatePortResults(results)
 }
 
-func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult) []string {
+func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult, ipHostMapping map[string][]string) []string {
 	seen := make(map[string]struct{})
 	var targets []string
 
@@ -643,16 +646,28 @@ func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult) []string {
 			continue
 		}
 
-		targetURL := fmt.Sprintf("%s://%s:%d", scheme, host, r.Port)
-		if (scheme == "http" && r.Port == 80) || (scheme == "https" && r.Port == 443) {
-			targetURL = fmt.Sprintf("%s://%s", scheme, host)
+		candidateHosts := []string{host}
+		if mappedHosts, ok := ipHostMapping[host]; ok && len(mappedHosts) > 0 {
+			candidateHosts = append(candidateHosts, mappedHosts...)
 		}
 
-		if _, exists := seen[targetURL]; exists {
-			continue
+		for _, candidateHost := range candidateHosts {
+			candidateHost = strings.TrimSpace(candidateHost)
+			if candidateHost == "" {
+				continue
+			}
+
+			targetURL := fmt.Sprintf("%s://%s:%d", scheme, candidateHost, r.Port)
+			if (scheme == "http" && r.Port == 80) || (scheme == "https" && r.Port == 443) {
+				targetURL = fmt.Sprintf("%s://%s", scheme, candidateHost)
+			}
+
+			if _, exists := seen[targetURL]; exists {
+				continue
+			}
+			seen[targetURL] = struct{}{}
+			targets = append(targets, targetURL)
 		}
-		seen[targetURL] = struct{}{}
-		targets = append(targets, targetURL)
 	}
 
 	return targets
@@ -787,7 +802,7 @@ func (sc *ScanController) performPortScanAndRescan() ([]interfaces.HTTPResponse,
 	sc.lastPortExpr = portsExpr
 	sc.lastPortRate = rate
 
-	httpTargets := deriveHTTPRescanTargets(results)
+	httpTargets := deriveHTTPRescanTargets(results, sc.ipHostMapping)
 	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
 	if len(filteredTargets) == 0 {
 		return nil, nil, nil
@@ -887,6 +902,82 @@ func appendUniqueTargets(base []string, additional []string) []string {
 		base = append(base, t)
 	}
 	return base
+}
+
+func (sc *ScanController) enrichIPHostMapping(targets []string) {
+	if len(targets) == 0 {
+		return
+	}
+
+	if sc.ipHostMapping == nil {
+		sc.ipHostMapping = make(map[string][]string)
+	}
+
+	for _, target := range targets {
+		host := extractHostForMapping(target)
+		if host == "" {
+			continue
+		}
+
+		if net.ParseIP(host) != nil {
+			continue
+		}
+
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			logger.Debugf("域名解析失败，跳过IP映射: %s, err: %v", host, err)
+			continue
+		}
+
+		for _, ipAddr := range ips {
+			ipStr := strings.TrimSpace(ipAddr.String())
+			if ipStr == "" {
+				continue
+			}
+
+			if containsString(sc.ipHostMapping[ipStr], host) {
+				continue
+			}
+			sc.ipHostMapping[ipStr] = append(sc.ipHostMapping[ipStr], host)
+		}
+	}
+}
+
+func extractHostForMapping(target string) string {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return ""
+	}
+
+	if strings.Contains(trimmed, "://") {
+		if parsed, err := url.Parse(trimmed); err == nil {
+			return parsed.Hostname()
+		}
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) > 0 {
+		trimmed = parts[0]
+	}
+
+	trimmed = strings.Trim(trimmed, "[]")
+
+	if strings.Contains(trimmed, ":") {
+		if host, _, err := net.SplitHostPort(trimmed); err == nil {
+			trimmed = host
+		}
+	}
+
+	return strings.TrimSpace(trimmed)
+}
+
+func containsString(values []string, target string) bool {
+	for _, v := range values {
+		if v == target {
+			return true
+		}
+	}
+	return false
 }
 
 // runDirscanModule 运行目录扫描模块（多目标并发优化）
@@ -1082,40 +1173,23 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 		wg.Add(1)
 		go func(targetURL string) {
 			defer func() {
-				// 修复：添加panic恢复，确保WaitGroup计数正确
 				if r := recover(); r != nil {
 					logger.Errorf("指纹识别panic恢复: %v, 目标: %s", r, targetURL)
 				}
 				wg.Done()
 			}()
 
-			// 获取目标信号量（改进：增加重试机制，避免目标丢失）
-			acquired := false
-			for retryCount := 0; retryCount < 3 && !acquired; retryCount++ {
-				select {
-				case targetSem <- struct{}{}:
-					acquired = true
-					defer func() {
-						select {
-						case <-targetSem:
-						default:
-							// 信号量已满，不需要释放
-						}
-					}()
-				case <-ctx.Done():
-					logger.Debugf("指纹识别取消: %s", targetURL)
-					return
-				case <-time.After(time.Duration(30+retryCount*10) * time.Second): // 递增超时时间
-					if retryCount < 2 {
-						logger.Warnf("FingerPrint Timeout，skip %d/3: %s", retryCount+1, targetURL)
-					} else {
-						logger.Errorf("FingerPrint Timeout，skip: %s", targetURL)
-						return
-					}
-				}
+			// 阻塞等待信号量，除非整体上下文被取消
+			select {
+			case targetSem <- struct{}{}:
+				defer func() {
+					<-targetSem
+				}()
+			case <-ctx.Done():
+				logger.Debugf("指纹识别取消: %s", targetURL)
+				return
 			}
 
-			// 处理单个目标的指纹识别（添加超时检查）
 			select {
 			case <-ctx.Done():
 				logger.Debugf("指纹识别处理被取消: %s", targetURL)
@@ -1125,13 +1199,11 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 
 			results := sc.processSingleTargetFingerprintWithTimeout(ctx, targetURL)
 
-			// 更新已完成主机数统计
 			if sc.statsDisplay.IsEnabled() {
 				sc.statsDisplay.IncrementCompletedHosts()
 				logger.Debugf("指纹识别完成目标 %s，更新已完成主机数", targetURL)
 			}
 
-			// 合并结果
 			resultsMu.Lock()
 			allResults = append(allResults, results...)
 			resultsMu.Unlock()
