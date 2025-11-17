@@ -85,6 +85,22 @@ func (cm *ConsoleManager) SetFingerprintAddon(addon *fingerprint.FingerprintAddo
 	logger.Debug("指纹识别插件已设置")
 }
 
+// PauseFingerprintRecognition 暂停指纹识别
+func (cm *ConsoleManager) PauseFingerprintRecognition() {
+	if cm.fingerprintAddon != nil {
+		cm.fingerprintAddon.Disable()
+		logger.Info("Fingerprint Recognition Paused")
+	}
+}
+
+// ResumeFingerprintRecognition 恢复指纹识别
+func (cm *ConsoleManager) ResumeFingerprintRecognition() {
+	if cm.fingerprintAddon != nil {
+		cm.fingerprintAddon.Enable()
+		logger.Info("Fingerprint Recognition Resume")
+	}
+}
+
 // ============================================================================
 // 内部辅助方法 (原manager.go内容)
 // ============================================================================

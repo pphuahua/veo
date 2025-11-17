@@ -49,6 +49,7 @@ func NewDirscanAddon(config *EngineConfig) (*DirscanAddon, error) {
 // CreateDefaultAddon 创建默认配置的目录扫描插件
 func CreateDefaultAddon() (*DirscanAddon, error) {
 	config := getDefaultConfig()
+	config.EnableReporting = false
 	return NewDirscanAddon(config)
 }
 
@@ -256,7 +257,7 @@ func (da *DirscanAddon) handleScanTrigger() {
 	}
 
 	if result != nil {
-		logger.Infof("Scan Success，Times: %v，Result: %d",
+		logger.Infof("Scanning Done，Times: %v，Result: %d",
 			result.Duration, len(result.FilterResult.ValidPages))
 		if result.ReportPath != "" {
 			logger.Infof("Scan Report Output: %s", result.ReportPath)
@@ -273,6 +274,9 @@ func (da *DirscanAddon) showScanCompleteMessage(result *ScanResult) {
 	if da.collector != nil {
 		da.collector.PauseCollection()
 	}
+	if da.consoleManager != nil {
+		da.consoleManager.PauseFingerprintRecognition()
+	}
 
 	// 等待用户按回车键
 	da.waitForUserInput()
@@ -282,6 +286,9 @@ func (da *DirscanAddon) showScanCompleteMessage(result *ScanResult) {
 		da.collector.ClearURLMap()      // 清空collector状态
 		da.collector.ResumeCollection() // 恢复暂停状态
 		da.collector.EnableCollection() // 重新启用收集功能
+	}
+	if da.consoleManager != nil {
+		da.consoleManager.ResumeFingerprintRecognition()
 	}
 
 	// 清空引擎结果

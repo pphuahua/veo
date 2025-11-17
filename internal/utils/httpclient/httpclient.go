@@ -24,6 +24,11 @@ type HTTPClientInterface interface {
 	MakeRequest(rawURL string) (body string, statusCode int, err error)
 }
 
+// HeaderAwareClient 支持自定义请求头的HTTP客户端
+type HeaderAwareClient interface {
+	MakeRequestWithHeaders(rawURL string, headers map[string]string) (body string, statusCode int, err error)
+}
+
 // ===========================================
 // 配置结构
 // ===========================================
@@ -128,6 +133,15 @@ func New(config *Config) *Client {
 
 // MakeRequest 实现HTTPClientInterface接口，支持TLS和重定向
 func (c *Client) MakeRequest(rawURL string) (body string, statusCode int, err error) {
+	return c.executeRequest(rawURL, nil)
+}
+
+// MakeRequestWithHeaders 支持附加自定义请求头
+func (c *Client) MakeRequestWithHeaders(rawURL string, headers map[string]string) (body string, statusCode int, err error) {
+	return c.executeRequest(rawURL, headers)
+}
+
+func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) (body string, statusCode int, err error) {
 	logger.Debugf("发起请求: %s (跟随重定向: %v)", rawURL, c.followRedirect)
 
 	// 创建请求
@@ -138,6 +152,15 @@ func (c *Client) MakeRequest(rawURL string) (body string, statusCode int, err er
 
 	// 设置请求头
 	c.setRequestHeaders(req)
+	if len(customHeaders) > 0 {
+		for key, value := range customHeaders {
+			trimmedKey := strings.TrimSpace(key)
+			if trimmedKey == "" {
+				continue
+			}
+			req.Header.Set(trimmedKey, value)
+		}
+	}
 
 	// 发起请求
 	resp, err := c.client.Do(req)
@@ -175,7 +198,7 @@ func (c *Client) setRequestHeaders(req *http.Request) {
 	req.Header.Set("Pragma", "no-cache")
 
 	// [新增] 为指纹识别添加自定义Cookie头
-	req.Header.Set("Cookie", "rememberMe=deleteMe;")
+	req.Header.Set("Cookie", "rememberMe=1")
 
 	// 应用全局配置中的自定义头部（如学习到的认证头部）
 	c.applyCustomHeaders(req)

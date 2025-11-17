@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"veo/internal/core/console"
 	"veo/internal/core/logger"
 	modulepkg "veo/internal/core/module"
+	portconfig "veo/internal/core/ports"
 	"veo/internal/modules/authlearning"
 	"veo/internal/modules/dirscan"
 	"veo/internal/modules/fingerprint"
@@ -93,6 +95,9 @@ type CLIArgs struct {
 
 	// 新增：随机User-Agent控制
 	RandomUA bool // 是否启用随机User-Agent (-ua, 默认启用)
+
+	// 内部：端口优先模式标记
+	PortFirst bool
 }
 
 // ValidModules 有效的模块列表（使用module包的类型定义）
@@ -140,6 +145,7 @@ func Execute() {
 
 	// 解析命令行参数
 	args := ParseCLIArgs()
+	args.PortFirst = shouldUsePortFirst(args)
 
 	// 应用CLI参数到配置（包括--debug标志）
 	applyArgsToConfig(args)
@@ -181,8 +187,9 @@ func Execute() {
 		if err := runActiveScanMode(args); err != nil {
 			logger.Fatalf("主动扫描失败: %v", err)
 		}
+		reportPath := strings.TrimSpace(args.Output)
 		// 若启用端口模块，则在正常扫描完成后执行端口扫描（仅当未输出合并JSON文件时）
-		if args.HasModule("port") && !args.JSONOutput && !strings.HasSuffix(strings.ToLower(args.Output), ".json") {
+		if args.HasModule("port") && !args.PortFirst && !args.JSONOutput && !strings.HasSuffix(strings.ToLower(reportPath), ".json") {
 			if _, _, err := resolvePortExpression(args); err != nil {
 				logger.Fatalf("端口扫描参数错误: %v", err)
 			}
@@ -727,38 +734,41 @@ func applyArgsToConfig(args *CLIArgs) {
 		logger.SetLogLevel("error")
 	}
 
-	// 应用新的CLI参数到配置
 	requestConfig := config.GetRequestConfig()
-	randomUA := args.RandomUA
-	requestConfig.RandomUA = &randomUA
-	if args.RandomUA {
-		logger.Debug("CLI参数覆盖：随机User-Agent池已启用")
+	if requestConfig == nil {
+		logger.Warn("请求配置未初始化，跳过线程/超时设置")
 	} else {
-		logger.Debug("CLI参数覆盖：随机User-Agent池已禁用")
+		if args.Threads > 0 {
+			requestConfig.Threads = args.Threads
+			logger.Debugf("全局配置：线程并发数量设置为 %d", requestConfig.Threads)
+		} else if requestConfig.Threads <= 0 {
+			requestConfig.Threads = 200
+		}
+
+		if args.Retry > 0 {
+			requestConfig.Retry = args.Retry
+			logger.Debugf("全局配置：重试次数设置为 %d", requestConfig.Retry)
+		} else if requestConfig.Retry <= 0 {
+			requestConfig.Retry = 3
+		}
+
+		if args.Timeout > 0 {
+			requestConfig.Timeout = args.Timeout
+			logger.Debugf("全局配置：超时时间设置为 %d 秒", requestConfig.Timeout)
+		} else if requestConfig.Timeout <= 0 {
+			requestConfig.Timeout = 10
+		}
+
+		randomUA := args.RandomUA
+		requestConfig.RandomUA = &randomUA
 	}
 
-	// 应用线程并发数量（如果指定）
-	if args.Threads > 0 {
-		requestConfig.Threads = args.Threads
-		logger.Debugf("CLI参数覆盖：线程并发数量设置为 %d", args.Threads)
-	}
-
-	// 应用重试次数（如果指定）
-	if args.Retry > 0 {
-		requestConfig.Retry = args.Retry
-		logger.Debugf("CLI参数覆盖：重试次数设置为 %d", args.Retry)
-	}
-
-	// 应用超时时间（如果指定）
-	if args.Timeout > 0 {
-		requestConfig.Timeout = args.Timeout
-		logger.Debugf("CLI参数覆盖：超时时间设置为 %d 秒", args.Timeout)
-	}
-
-	// 新增：处理HTTP认证头部参数
+	// 处理HTTP认证头部参数
 	if len(args.Headers) > 0 {
-		if err := applyCustomHeaders(args.Headers); err != nil {
+		if parsed, err := parseHeaderFlags(args.Headers); err != nil {
 			logger.Errorf("HTTP头部参数处理失败: %v", err)
+		} else if len(parsed) > 0 {
+			config.SetCustomHeaders(parsed)
 		}
 	}
 
@@ -838,6 +848,7 @@ func createProxy() (*proxy.Proxy, error) {
 
 // runMasscanPortScan 调用 masscan 扫描（模块化实现）
 func runMasscanPortScan(args *CLIArgs) error {
+	reportPath := strings.TrimSpace(args.Output)
 	results, portsExpr, effectiveRate, err := runPortScanAndCollect(args, args.Targets, true, false)
 	if err != nil {
 		return err
@@ -854,10 +865,10 @@ func runMasscanPortScan(args *CLIArgs) error {
 			return jerr
 		}
 		fmt.Println(jsonStr)
-		if strings.TrimSpace(args.Output) != "" && strings.HasSuffix(strings.ToLower(args.Output), ".json") {
-			if err := os.MkdirAll(filepath.Dir(args.Output), 0o755); err != nil {
+		if reportPath != "" && strings.HasSuffix(strings.ToLower(reportPath), ".json") {
+			if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
 				logger.Errorf("创建输出目录失败: %v", err)
-			} else if werr := os.WriteFile(args.Output, []byte(jsonStr), 0o644); werr != nil {
+			} else if werr := os.WriteFile(reportPath, []byte(jsonStr), 0o644); werr != nil {
 				logger.Errorf("写入合并JSON失败: %v", werr)
 			}
 		}
@@ -873,8 +884,8 @@ func runMasscanPortScan(args *CLIArgs) error {
 	logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
 
 	// 若指定输出路径，则根据扩展名导出 JSON 或 Excel
-	if strings.TrimSpace(args.Output) != "" {
-		out := strings.TrimSpace(args.Output)
+	if reportPath != "" {
+		out := reportPath
 		lower := strings.ToLower(out)
 		if strings.HasSuffix(lower, ".json") {
 			// 落盘合并JSON（仅包含 portscan_results），与 --json 控制台一致
@@ -898,6 +909,33 @@ func runMasscanPortScan(args *CLIArgs) error {
 		}
 	}
 	return nil
+}
+
+func parseHeaderFlags(headers []string) (map[string]string, error) {
+	parsed := make(map[string]string)
+	for _, header := range headers {
+		h := strings.TrimSpace(header)
+		if h == "" {
+			continue
+		}
+		if strings.ContainsAny(h, "\r\n") {
+			return nil, fmt.Errorf("头部不能包含换行符: %q", h)
+		}
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("无效的头部格式: %s (需要 Header: Value)", h)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			return nil, fmt.Errorf("头部名称不能为空: %s", h)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("头部值不能为空: %s", h)
+		}
+		parsed[key] = value
+	}
+	return parsed, nil
 }
 
 // aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口字符串数组）
@@ -1137,82 +1175,6 @@ func runActiveScanMode(args *CLIArgs) error {
 }
 
 // ===========================================
-// HTTP头部解析和验证函数
-// ===========================================
-
-// parseHTTPHeaders 解析CLI参数中的HTTP头部
-func parseHTTPHeaders(headers []string) (map[string]string, error) {
-	parsedHeaders := make(map[string]string)
-
-	for _, header := range headers {
-		if err := validateHeaderFormat(header); err != nil {
-			return nil, fmt.Errorf("无效的头部格式 '%s': %v", header, err)
-		}
-
-		parts := strings.SplitN(header, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("头部格式错误，应为 'Header-Name: Header-Value'，实际: %s", header)
-		}
-
-		headerName := strings.TrimSpace(parts[0])
-		headerValue := strings.TrimSpace(parts[1])
-
-		if headerName == "" {
-			return nil, fmt.Errorf("头部名称不能为空: %s", header)
-		}
-
-		parsedHeaders[headerName] = headerValue
-		logger.Debugf("解析HTTP头部: %s = %s", headerName, headerValue)
-	}
-
-	return parsedHeaders, nil
-}
-
-// validateHeaderFormat 验证HTTP头部格式
-func validateHeaderFormat(header string) error {
-	if header == "" {
-		return fmt.Errorf("头部不能为空")
-	}
-
-	if !strings.Contains(header, ":") {
-		return fmt.Errorf("头部必须包含冒号分隔符")
-	}
-
-	// 检查是否包含非法字符（基本验证）
-	if strings.Contains(header, "\n") || strings.Contains(header, "\r") {
-		return fmt.Errorf("头部不能包含换行符")
-	}
-
-	return nil
-}
-
-// HasCustomHeaders 检查是否指定了自定义HTTP头部
-func (args *CLIArgs) HasCustomHeaders() bool {
-	return len(args.Headers) > 0
-}
-
-// applyCustomHeaders 应用自定义HTTP头部到配置系统
-func applyCustomHeaders(headers []string) error {
-	// 解析HTTP头部
-	parsedHeaders, err := parseHTTPHeaders(headers)
-	if err != nil {
-		return fmt.Errorf("解析HTTP头部失败: %v", err)
-	}
-
-	if len(parsedHeaders) == 0 {
-		logger.Debug("未指定有效的HTTP头部")
-		return nil
-	}
-
-	logger.Debugf("成功解析 %d 个HTTP头部", len(parsedHeaders))
-
-	// 将解析后的头部存储到配置系统中
-	config.SetCustomHeaders(parsedHeaders)
-
-	return nil
-}
-
-// ===========================================
 // 状态码过滤解析和验证函数
 // ===========================================
 
@@ -1357,95 +1319,15 @@ func normalizeTargetHost(raw string) (host string, port string, wildcard bool) {
 	return lower, port, strings.HasPrefix(lower, "*.")
 }
 
-func normalizePortList(content string) string {
-	if content == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer("\r", "\n", "\t", "\n", ";", "\n")
-	clean := replacer.Replace(content)
-	fields := strings.FieldsFunc(clean, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
-	})
-	return strings.Join(fields, ",")
-}
-
 func resolvePortExpression(args *CLIArgs) (string, string, error) {
-	raw := strings.TrimSpace(args.Ports)
-	if raw == "" {
-		return "", "", fmt.Errorf("端口扫描需要指定 -p 参数，例如: -p web / -p service / -p top1000 / -p all / -p 80,443,8000-8100")
-	}
-	lower := strings.ToLower(raw)
-	aliasFiles := map[string]string{
-		"web":     "configs/port/web.txt",
-		"service": "configs/port/service.txt",
-		"top5000": "configs/port/top5000.txt",
-		"top1000": "configs/port/top1000.txt",
-	}
-	switch lower {
-	case "all":
-		args.Ports = "1-65535"
-		return args.Ports, "all", nil
-	}
-	if path, ok := aliasFiles[lower]; ok {
-		expr, err := loadPortFile(path)
-		if err != nil {
-			return "", path, err
-		}
-		args.Ports = expr
-		return expr, path, nil
-	}
-	if strings.ContainsAny(raw, "/\\") || strings.HasSuffix(lower, ".txt") {
-		expr, err := loadPortFile(raw)
-		if err != nil {
-			return "", raw, err
-		}
-		args.Ports = expr
-		return expr, raw, nil
-	}
-	if isPortExpression(raw) {
-		return raw, "", nil
-	}
-	candidate := raw
-	if !strings.HasSuffix(strings.ToLower(candidate), ".txt") {
-		candidate = candidate + ".txt"
-	}
-	candidate = filepath.Join("configs/port", candidate)
-	if expr, err := loadPortFile(candidate); err == nil {
-		args.Ports = expr
-		return expr, candidate, nil
-	}
-	if isPortExpression(raw) {
-		return raw, "", nil
-	}
-	return "", "", fmt.Errorf("无法解析 -p 参数 '%s'，请使用端口范围或字典名称 (web/service/top1000/all)", raw)
-}
-
-func loadPortFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	expr, source, err := portconfig.ResolveExpression(args.Ports)
 	if err != nil {
-		return "", err
-	}
-	ports := normalizePortList(string(data))
-	if ports == "" {
-		return "", fmt.Errorf("端口字典 %s 为空", path)
-	}
-	return ports, nil
-}
-
-func isPortExpression(raw string) bool {
-	if strings.TrimSpace(raw) == "" {
-		return false
-	}
-	for _, r := range raw {
-		if r >= '0' && r <= '9' {
-			continue
+		if errors.Is(err, portconfig.ErrEmptyExpression) {
+			return "", "", fmt.Errorf("端口扫描需要指定 -p 参数，例如: -p web / -p service / -p top1000 / -p all / -p 80,443,8000-8100")
 		}
-		if r == ',' || r == '-' || r == ' ' || r == '\t' {
-			continue
-		}
-		return false
+		return "", "", err
 	}
-	return true
+	return expr, source, nil
 }
 
 func logPortScanBanner(ports string, rate int) {
@@ -1461,7 +1343,6 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 			return nil, "", effectiveRate, err
 		}
 		portsExpr = fallback
-		args.Ports = fallback
 		logger.Warnf("加载端口字典失败: %v，改用目标推导端口: %s", err, portsExpr)
 	} else if portSource != "" {
 		logger.Infof("Use Port Dict: %s", portSource)

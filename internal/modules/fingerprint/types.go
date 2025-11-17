@@ -1,9 +1,13 @@
 package fingerprint
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ===========================================
@@ -15,12 +19,13 @@ import (
 
 // FingerprintRule 指纹识别规则
 type FingerprintRule struct {
-	ID        string   `yaml:"-"`                   // 规则ID（从YAML key生成）
-	Name      string   `yaml:"-"`                   // 规则名称（从YAML key生成）
-	DSL       []string `yaml:"dsl"`                 // DSL表达式列表
-	Condition string   `yaml:"condition,omitempty"` // 条件逻辑 (and/or，默认or)
-	Category  string   `yaml:"category,omitempty"`  // 分类（可选）
-	Path      string   `yaml:"path,omitempty"`      // 新增：主动探测路径
+	ID        string     `yaml:"-"`                   // 规则ID（从YAML key生成）
+	Name      string     `yaml:"-"`                   // 规则名称（从YAML key生成）
+	DSL       []string   `yaml:"dsl"`                 // DSL表达式列表
+	Condition string     `yaml:"condition,omitempty"` // 条件逻辑 (and/or，默认or)
+	Category  string     `yaml:"category,omitempty"`  // 分类（可选）
+	Paths     StringList `yaml:"path,omitempty"`      // 主动探测路径（支持多值）
+	Headers   StringList `yaml:"header,omitempty"`    // 主动探测自定义头部（支持多值）
 }
 
 // FingerprintMatch 指纹匹配结果
@@ -73,6 +78,110 @@ type Engine struct {
 	contentTypeFilterEnabled bool
 	showSnippet              bool
 	loadedSummaries          []string // 已加载规则文件摘要，例如 finger.yaml:754
+}
+
+// StringList 支持标量或数组的字符串列表解析
+type StringList []string
+
+// UnmarshalYAML 支持将标量或序列解析为字符串切片
+func (sl *StringList) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil {
+		*sl = nil
+		return nil
+	}
+
+	switch value.Kind {
+	case yaml.ScalarNode:
+		trimmed := strings.TrimSpace(value.Value)
+		if trimmed == "" {
+			*sl = nil
+			return nil
+		}
+		*sl = []string{trimmed}
+		return nil
+	case yaml.SequenceNode:
+		result := make([]string, 0, len(value.Content))
+		for _, node := range value.Content {
+			if node == nil {
+				continue
+			}
+			if node.Kind == yaml.ScalarNode {
+				trimmed := strings.TrimSpace(node.Value)
+				if trimmed != "" {
+					result = append(result, trimmed)
+				}
+			}
+		}
+		if len(result) == 0 {
+			*sl = nil
+			return nil
+		}
+		*sl = result
+		return nil
+	case yaml.AliasNode:
+		if value.Alias != nil {
+			return sl.UnmarshalYAML(value.Alias)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported YAML node for string list: %v", value.Kind)
+	}
+}
+
+// Values 返回底层切片副本（避免外部修改）
+func (sl StringList) Values() []string {
+	if len(sl) == 0 {
+		return nil
+	}
+	result := make([]string, len(sl))
+	copy(result, sl)
+	return result
+}
+
+// HasPaths 判断规则是否包含主动探测路径
+func (r *FingerprintRule) HasPaths() bool {
+	return len(r.Paths) > 0
+}
+
+// HasHeaders 判断规则是否包含自定义Header
+func (r *FingerprintRule) HasHeaders() bool {
+	return len(r.Headers) > 0
+}
+
+// GetHeaderMap 将header定义转换为键值映射
+func (r *FingerprintRule) GetHeaderMap() map[string]string {
+	if len(r.Headers) == 0 {
+		return nil
+	}
+	headers := make(map[string]string)
+	for _, line := range r.Headers {
+		key, value, ok := parseHeaderLine(line)
+		if !ok {
+			continue
+		}
+		headers[key] = value
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
+}
+
+func parseHeaderLine(line string) (string, string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(trimmed, ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	key := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+	if key == "" {
+		return "", "", false
+	}
+	return key, value, true
 }
 
 // Statistics 统计信息

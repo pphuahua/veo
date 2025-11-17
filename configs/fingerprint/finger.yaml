@@ -436,7 +436,9 @@ faqrobot:
     - "contains(body, '南京云问网络技术有限公司')"
 
 fastadmin-framework:
-  path: "/assets/img/error.svg"
+  path:
+   - "/assets/img/error.svg"
+   - "/static/common/img/error.svg"
   dsl:
     - "contains(body, '<desc>Created with Sketch.</desc>')"
     - "contains(body, 'fastadmin')"
@@ -735,6 +737,11 @@ jeecms:
     - "contains(body, 'loginController.do')"
     - "contains(url, 'cgformSqlController')"
     - "contains(url, 'loginController.do')"
+
+jeesite:
+  dsl:
+    - "contains(body,'userfiles/2')"
+    - "contains(header, 'jeesite.')"
 
 jeewms:
   dsl:
@@ -1331,7 +1338,6 @@ bt-cn:
 inspur-ipmi:
   dsl:
     - "contains(body, 'img/inspur_logo.png')"
-    - "contains(body, 'Management System')"
 
 tomcat:
   dsl:
@@ -1962,6 +1968,7 @@ metacrm:
 bladex:
   dsl:
     - "contains(body, 'svg/loading-spin.svg')"
+    - "contains(url, 'blade-auth')"
     - "contains(body, 'bladex')"
     - "icon('/favicon.png', '952438bb6af042855ed192384032e37b')"
 
@@ -2142,7 +2149,7 @@ shiro:
   dsl:
     - "contains(header, 'rememberMe=')"
     - "contains(header, '=deleteMe')"
-    - "contains(body, 'rememberme')"
+    - "contains(body, 'rememberme=')"
 
 phpsessid:
   dsl:
@@ -2899,7 +2906,6 @@ yzmcms:
 微三云管理系统:
   dsl:
     - "contains(body, 'WSY_logo')"
-    - "contains(body, '管理系统 MANAGEMENT SYSTEM')"
 
 微宏-oa:
   dsl:
@@ -3191,6 +3197,7 @@ yzmcms:
   dsl:
     - "contains(body, 'ruoyi')"
     - "contains(body, '若依')"
+    - "icon('/favicon.ico','4eeb8a8eb30b70af511dcc28c11a3216')"
     - "contains_all(body, 'ry-ui','username','rememberme')"
     - "contains(body, 'ry-ui.css')"
     - "contains(body, 'ry-ui.js')"
@@ -3371,7 +3378,8 @@ H3C-iMC智能管理中心:
     - "contains(body, '/selfservice/preregister','mainForm:ifCheckCode','loginRegisterContent','/selfservice/index.xhtml')"
 
 ureport:
-  path: "/ureport/designer"
+  path:
+    - "/ureport/designer"
   dsl:
     - "contains_all(body, 'ureport','ureport-asserts')"
     - "contains(body, 'window._server=\"/ureport\"')"
@@ -3411,3 +3419,13 @@ Portainer:
 h3c网管系统:
   dsl:
   - "contains(body, 'customdir/images/china_logo.jpg','WnmIsLoginDescSupported')"
+
+安恒明御WAF:
+  dsl:
+  - "contains_all(body, '权限问题或行为非法，您的访问被拒绝','Request')"
+
+
+ArcGIS:
+  dsl:
+  - "contains(body, 'arcgismanager','dojo/dojo/dojo.js')"
+  - "contains(header, 'arcgis')"

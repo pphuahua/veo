@@ -44,9 +44,18 @@ type FingerprintProgressTracker struct {
 }
 
 func shouldUsePortFirst(args *CLIArgs) bool {
+	if args.HasModule("port") && len(args.Modules) > 1 {
+		return true
+	}
 	if strings.TrimSpace(args.Ports) == "" {
 		return false
 	}
+
+	// 当同时启用端口、指纹、目录扫描模块并指定端口时，强制走端口优先流程
+	if args.HasModule(string(modulepkg.ModuleDirscan)) && args.HasModule(string(modulepkg.ModuleFinger)) {
+		return true
+	}
+
 	rawTargets, err := collectRawTargets(args)
 	if err != nil {
 		logger.Warnf("解析目标失败，回退到非端口优先模式: %v", err)
@@ -196,6 +205,13 @@ type ScanController struct {
 	lastPortExpr           string
 	lastPortRate           int
 	portFirstMode          bool
+	maxConcurrent          int
+	retryCount             int
+	timeoutSeconds         int
+	reportPath             string
+	wordlistPath           string
+	skipAliveCheck         bool
+	rawTargets             []string
 
 	// 缓存最近一次各模块结果（用于合并报告落盘）
 	lastDirscanResults     []interfaces.HTTPResponse
@@ -209,36 +225,31 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		mode = PassiveMode
 	}
 
-	// 从配置文件获取请求配置（CLI参数已通过applyArgsToConfig应用到配置）
-	requestConfigFromFile := config.GetRequestConfig()
-	logger.Debugf("配置文件中的线程数: %d", requestConfigFromFile.Threads)
-	logger.Debugf("配置文件中的重试次数: %d", requestConfigFromFile.Retry)
-	logger.Debugf("配置文件中的超时时间: %d", requestConfigFromFile.Timeout)
+	portFirstMode := args.PortFirst
+	if !portFirstMode {
+		portFirstMode = shouldUsePortFirst(args)
+	}
+
+	threads := args.Threads
+	if threads <= 0 {
+		threads = 200
+	}
+	retry := args.Retry
+	if retry <= 0 {
+		retry = 3
+	}
+	timeout := args.Timeout
+	if timeout <= 0 {
+		timeout = 10
+	}
 
 	// 创建请求处理器配置
 	requestConfig := &requests.RequestConfig{
-		Timeout:        time.Duration(requestConfigFromFile.Timeout) * time.Second, // [修复] 使用配置文件中的超时时间（包含CLI参数覆盖）
-		MaxRetries:     requestConfigFromFile.Retry,                                // [修复] 使用配置文件中的重试次数（包含CLI参数覆盖）
-		MaxConcurrent:  requestConfigFromFile.Threads,                              // [修复] 使用配置文件中的线程数（包含CLI参数覆盖）
-		FollowRedirect: true,                                                       // 修复：启用重定向跟随，确保指纹识别准确性
-	}
-
-	// 如果配置文件中的线程数为0，使用默认值200
-	if requestConfig.MaxConcurrent <= 0 {
-		logger.Debugf("配置文件中线程数为0，使用默认值200")
-		requestConfig.MaxConcurrent = 200
-	}
-
-	// 如果配置文件中的重试次数为0，使用默认值3
-	if requestConfig.MaxRetries <= 0 {
-		logger.Debugf("配置文件中重试次数为0，使用默认值3")
-		requestConfig.MaxRetries = 3
-	}
-
-	// 如果配置文件中的超时时间为0，使用默认值10秒
-	if requestConfig.Timeout <= 0 {
-		logger.Debugf("配置文件中超时时间为0，使用默认值10秒")
-		requestConfig.Timeout = 10 * time.Second
+		Timeout:         time.Duration(timeout) * time.Second,
+		MaxRetries:      retry,
+		MaxConcurrent:   threads,
+		FollowRedirect:  true,
+		RandomUserAgent: args.RandomUA,
 	}
 
 	logger.Debugf("请求处理器并发数设置为: %d", requestConfig.MaxConcurrent)
@@ -296,7 +307,13 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		probedHosts:            make(map[string]bool),              // 初始化探测缓存
 		statsDisplay:           statsDisplay,                       // 初始化统计显示器
 		showFingerprintSnippet: snippetEnabled,
-		portFirstMode:          shouldUsePortFirst(args),
+		portFirstMode:          portFirstMode,
+		maxConcurrent:          threads,
+		retryCount:             retry,
+		timeoutSeconds:         timeout,
+		reportPath:             strings.TrimSpace(args.Output),
+		wordlistPath:           strings.TrimSpace(args.Wordlist),
+		skipAliveCheck:         args.NoAliveCheck,
 	}
 }
 
@@ -323,6 +340,7 @@ func (sc *ScanController) runActiveMode() error {
 	if len(rawTargets) == 0 {
 		return fmt.Errorf("没有有效的目标")
 	}
+	sc.rawTargets = rawTargets
 
 	if sc.portFirstMode {
 		sc.lastTargets = rawTargets
@@ -440,7 +458,7 @@ func (sc *ScanController) finalizeScan(allResults, dirResults, fingerprintResult
 	sc.lastDirscanResults = dirResults
 	sc.lastFingerprintResults = fingerprintResults
 
-	if strings.TrimSpace(sc.args.Output) != "" {
+	if sc.reportPath != "" {
 		if err := sc.generateReport(filterResult); err != nil {
 			logger.Errorf("报告生成失败: %v", err)
 		}
@@ -470,6 +488,10 @@ func (sc *ScanController) runPortFirstWorkflow(rawTargets []string) error {
 		sc.statsDisplay.SetTotalHosts(int64(len(rawTargets)))
 	}
 
+	if len(sc.rawTargets) == 0 {
+		sc.rawTargets = rawTargets
+	}
+
 	results, portsExpr, rate, err := runPortScanAndCollect(sc.args, rawTargets, true, true)
 	if err != nil {
 		return err
@@ -483,7 +505,7 @@ func (sc *ScanController) runPortFirstWorkflow(rawTargets []string) error {
 	sc.lastPortExpr = portsExpr
 	sc.lastPortRate = rate
 
-	httpTargets := buildHTTPRescanTargets(results)
+	httpTargets := deriveHTTPRescanTargets(results)
 	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
 	if len(filteredTargets) == 0 {
 		logger.Info("端口扫描未发现 HTTP/HTTPS 服务，无需二轮扫描")
@@ -517,9 +539,9 @@ func (sc *ScanController) runPassiveMode() error {
 
 func (sc *ScanController) buildScanParams() map[string]interface{} {
 	params := map[string]interface{}{
-		"threads":                   sc.args.Threads,
-		"timeout":                   sc.args.Timeout,
-		"retry":                     sc.args.Retry,
+		"threads":                   sc.maxConcurrent,
+		"timeout":                   sc.timeoutSeconds,
+		"retry":                     sc.retryCount,
 		"dir_targets_count":         0,
 		"fingerprint_targets_count": 0,
 		"fingerprint_rules_loaded":  0,
@@ -596,6 +618,46 @@ func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []
 	return results, aggregatePortResults(results)
 }
 
+func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult) []string {
+	seen := make(map[string]struct{})
+	var targets []string
+
+	for _, r := range results {
+		service := strings.ToLower(strings.TrimSpace(r.Service))
+		if service == "" {
+			continue
+		}
+
+		var scheme string
+		switch {
+		case strings.HasPrefix(service, "https"):
+			scheme = "https"
+		case strings.HasPrefix(service, "http"):
+			scheme = "http"
+		default:
+			continue
+		}
+
+		host := strings.TrimSpace(r.IP)
+		if host == "" {
+			continue
+		}
+
+		targetURL := fmt.Sprintf("%s://%s:%d", scheme, host, r.Port)
+		if (scheme == "http" && r.Port == 80) || (scheme == "https" && r.Port == 443) {
+			targetURL = fmt.Sprintf("%s://%s", scheme, host)
+		}
+
+		if _, exists := seen[targetURL]; exists {
+			continue
+		}
+		seen[targetURL] = struct{}{}
+		targets = append(targets, targetURL)
+	}
+
+	return targets
+}
+
 // aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口数组）
 // aggregatePortResults (scanner) 移至 cli.go，避免重复定义
 
@@ -647,7 +709,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 
 	// 连通性检测和URL标准化
 	var validTargets []string
-	if sc.args != nil && sc.args.NoAliveCheck {
+	if sc.skipAliveCheck {
 		parser := batch.NewTargetParser()
 		for _, target := range uniqueTargets {
 			urls := parser.NormalizeURL(target)
@@ -708,7 +770,7 @@ func (sc *ScanController) runModuleForTargets(moduleName string, targets []strin
 }
 
 func (sc *ScanController) performPortScanAndRescan() ([]interfaces.HTTPResponse, []interfaces.HTTPResponse, []interfaces.HTTPResponse) {
-	baseTargets := sc.lastTargets
+	baseTargets := sc.rawTargets
 	if len(baseTargets) == 0 {
 		baseTargets = sc.args.Targets
 	}
@@ -725,7 +787,7 @@ func (sc *ScanController) performPortScanAndRescan() ([]interfaces.HTTPResponse,
 	sc.lastPortExpr = portsExpr
 	sc.lastPortRate = rate
 
-	httpTargets := buildHTTPRescanTargets(results)
+	httpTargets := deriveHTTPRescanTargets(results)
 	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
 	if len(filteredTargets) == 0 {
 		return nil, nil, nil
@@ -784,36 +846,6 @@ func (sc *ScanController) getSecondPassModules() []string {
 	return modules
 }
 
-func buildHTTPRescanTargets(results []portscanpkg.OpenPortResult) []string {
-	seen := make(map[string]struct{})
-	var targets []string
-	for _, r := range results {
-		svc := strings.ToLower(strings.TrimSpace(r.Service))
-		if svc == "" {
-			continue
-		}
-		var scheme string
-		if strings.HasPrefix(svc, "https") {
-			scheme = "https"
-		} else if strings.HasPrefix(svc, "http") {
-			scheme = "http"
-		} else {
-			continue
-		}
-		host := r.IP
-		url := fmt.Sprintf("%s://%s:%d", scheme, host, r.Port)
-		if (scheme == "http" && r.Port == 80) || (scheme == "https" && r.Port == 443) {
-			url = fmt.Sprintf("%s://%s", scheme, host)
-		}
-		if _, ok := seen[url]; ok {
-			continue
-		}
-		seen[url] = struct{}{}
-		targets = append(targets, url)
-	}
-	return targets
-}
-
 func (sc *ScanController) filterHTTPRescanTargets(targets []string) []string {
 	if len(targets) == 0 {
 		return nil
@@ -861,16 +893,14 @@ func appendUniqueTargets(base []string, additional []string) []string {
 func (sc *ScanController) runDirscanModule(targets []string) ([]interfaces.HTTPResponse, error) {
 	originalContext := sc.requestProcessor.GetModuleContext()
 	sc.requestProcessor.SetModuleContext("dirscan")
-	sc.requestProcessor.ResetConnectionRefusedState()
 	defer func() {
-		sc.requestProcessor.ResetConnectionRefusedState()
 		sc.requestProcessor.SetModuleContext(originalContext)
 	}()
 
 	// 模块启动提示
 	dictInfo := "dict/common.txt"
-	if sc.args != nil && strings.TrimSpace(sc.args.Wordlist) != "" {
-		dictInfo = sc.args.Wordlist
+	if strings.TrimSpace(sc.wordlistPath) != "" {
+		dictInfo = sc.wordlistPath
 	}
 	// 模块开始前空行，提升可读性
 	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Dirscan, Loaded Dict: %s", dictInfo)))
@@ -1073,13 +1103,13 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 						}
 					}()
 				case <-ctx.Done():
-					logger.Debugf("指纹识别被取消: %s", targetURL)
+					logger.Debugf("指纹识别取消: %s", targetURL)
 					return
 				case <-time.After(time.Duration(30+retryCount*10) * time.Second): // 递增超时时间
 					if retryCount < 2 {
-						logger.Warnf("获取指纹识别信号量超时，重试 %d/3: %s", retryCount+1, targetURL)
+						logger.Warnf("FingerPrint Timeout，skip %d/3: %s", retryCount+1, targetURL)
 					} else {
-						logger.Errorf("获取指纹识别信号量最终失败，跳过目标: %s", targetURL)
+						logger.Errorf("FingerPrint Timeout，skip: %s", targetURL)
 						return
 					}
 				}
@@ -1317,18 +1347,19 @@ func (sc *ScanController) generateDirscanURLs(target string) []string {
 // generateReport 生成扫描报告
 func (sc *ScanController) generateReport(filterResult *interfaces.FilterResult) error {
 	// 检查输出路径是否指定
-	if sc.args.Output == "" {
+	reportPath := strings.TrimSpace(sc.reportPath)
+	if reportPath == "" {
 		logger.Debug("未指定输出路径，跳过报告生成")
 		return nil
 	}
 
 	// 检查目标文件是否已存在
-	if _, err := os.Stat(sc.args.Output); err == nil {
-		logger.Infof("Override Files: %s", sc.args.Output)
+	if _, err := os.Stat(reportPath); err == nil {
+		logger.Infof("Override Files: %s", reportPath)
 	}
 
 	// 使用自定义报告生成器，直接指定输出路径
-	reportPath, err := sc.generateCustomReport(filterResult, sc.args.Output)
+	reportPath, err := sc.generateCustomReport(filterResult, reportPath)
 	if err != nil {
 		return fmt.Errorf("报告生成失败: %v", err)
 	}
@@ -1352,12 +1383,19 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 		if strings.TrimSpace(sc.args.Ports) != "" {
 			// 计算有效速率与端口表达式（用于指示器输出）
 			effectiveRate := masscanrunner.ComputeEffectiveRate(sc.args.Rate)
-			portsExpr := strings.TrimSpace(sc.args.Ports)
 
 			// 执行端口扫描（一次），复用结果：控制台打印 + 合并JSON
 			reused := len(sc.lastPortResults) > 0
 			results, agg := sc.collectPortResults()
 			pr = agg
+			portsExpr := sc.lastPortExpr
+			if portsExpr == "" {
+				if resolved, _, err := resolvePortExpression(sc.args); err == nil {
+					portsExpr = resolved
+				} else {
+					portsExpr = strings.TrimSpace(sc.args.Ports)
+				}
+			}
 
 			if !reused {
 				fmt.Println()
@@ -1401,7 +1439,11 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 		// 若包含端口扫描参数，则合并端口结果到 Excel
 		if strings.TrimSpace(sc.args.Ports) != "" {
 			// 准备 masscan 选项（与控制台JSON相同）
-			portsExpr := strings.TrimSpace(sc.args.Ports)
+			portsExpr, _, err := resolvePortExpression(sc.args)
+			if err != nil {
+				logger.Errorf("端口表达式解析失败，Excel报告不包含端口: %v", err)
+				return report.GenerateExcelReport(filterResult, reportType, outputPath)
+			}
 			var targets []string
 			if strings.TrimSpace(sc.args.TargetFile) == "" {
 				if ips, err := masscanrunner.ResolveTargetsToIPs(sc.args.Targets); err == nil {
@@ -1480,8 +1522,8 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 	} else {
 		// 目录扫描JSON报告
 		// 添加目录扫描特定参数
-		if sc.args.Wordlist != "" {
-			scanParams["wordlist"] = sc.args.Wordlist
+		if sc.wordlistPath != "" {
+			scanParams["wordlist"] = sc.wordlistPath
 		} else {
 			scanParams["wordlist"] = "default"
 		}
@@ -1757,7 +1799,7 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 		return
 	}
 
-	logger.Debugf("找到 %d 个包含path字段的规则，开始逐一探测", len(pathRules))
+	logger.Debugf("找到 %d 个包含path字段的规则，开始展开路径", len(pathRules))
 
 	// 解析baseURL获取协议和主机
 	parsedURL, err := url.Parse(baseURL)
@@ -1769,6 +1811,33 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 	scheme := parsedURL.Scheme
 	host := parsedURL.Host
 
+	var tasks []struct {
+		rule *fingerprint.FingerprintRule
+		path string
+	}
+	for _, rule := range pathRules {
+		if rule == nil {
+			continue
+		}
+		for _, rawPath := range rule.Paths {
+			trimmed := strings.TrimSpace(rawPath)
+			if trimmed == "" {
+				continue
+			}
+			tasks = append(tasks, struct {
+				rule *fingerprint.FingerprintRule
+				path string
+			}{rule: rule, path: trimmed})
+		}
+	}
+
+	totalPaths := len(tasks)
+	if totalPaths == 0 {
+		logger.Debug("没有有效的path路径，跳过主动探测")
+		return
+	}
+	logger.Debugf("共需探测 %d 条路径", totalPaths)
+
 	// 性能优化：并发遍历所有path规则进行探测（修复：添加超时和panic恢复）
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -1776,9 +1845,9 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 50) // 性能优化：提升path探测并发数
 
-	for i, rule := range pathRules {
+	for i, task := range tasks {
 		wg.Add(1)
-		go func(index int, r *fingerprint.FingerprintRule) {
+		go func(index int, r *fingerprint.FingerprintRule, path string) {
 			defer func() {
 				// 修复：添加panic恢复，确保WaitGroup计数正确
 				if rec := recover(); rec != nil {
@@ -1813,8 +1882,8 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 			default:
 			}
 
-			sc.processPathRuleWithTimeout(ctx, index, len(pathRules), r, scheme, host, baseURL, httpClient)
-		}(i, rule)
+			sc.processPathRuleWithTimeout(ctx, index, totalPaths, r, path, scheme, host, baseURL, httpClient)
+		}(i, task.rule, task.path)
 	}
 
 	// 等待所有path探测完成（修复：添加超时保护）
@@ -1834,7 +1903,7 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 		cancel() // 取消所有正在进行的探测
 	}
 
-	logger.Debugf("并发path字段主动探测完成: %s (共探测 %d 个路径)", baseURL, len(pathRules))
+	logger.Debugf("并发path字段主动探测完成: %s (共探测 %d 条路径)", baseURL, totalPaths)
 
 	// [新增] 404页面指纹识别
 	sc.perform404PageProbing(baseURL, httpClient)
@@ -1899,7 +1968,7 @@ func (sc *ScanController) performPathProbingWithTimeout(ctx context.Context, tar
 }
 
 // processPathRuleWithTimeout 处理单个path规则（新增：支持超时）
-func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index, total int, rule *fingerprint.FingerprintRule, scheme, host, baseURL string, httpClient interface{}) {
+func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index, total int, rule *fingerprint.FingerprintRule, path, scheme, host, baseURL string, httpClient interface{}) {
 	// 创建带超时的context
 	ruleCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1917,7 +1986,7 @@ func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index,
 
 		// 类型断言转换为正确的接口类型
 		if client, ok := httpClient.(httpclient.HTTPClientInterface); ok {
-			sc.processPathRule(index, total, rule, scheme, host, baseURL, client)
+			sc.processPathRule(index, total, rule, path, scheme, host, baseURL, client)
 		} else {
 			logger.Warnf("HTTP客户端类型转换失败，跳过path规则: %s", rule.Name)
 		}
@@ -1932,15 +2001,16 @@ func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index,
 }
 
 // processPathRule 处理单个path规则（提取出来支持并发）
-func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.FingerprintRule, scheme, host, baseURL string, httpClient httpclient.HTTPClientInterface) {
+func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.FingerprintRule, path, scheme, host, baseURL string, httpClient httpclient.HTTPClientInterface) {
 	// 构造完整的探测URL
-	probeURL := fmt.Sprintf("%s://%s%s", scheme, host, rule.Path)
+	probeURL := sc.buildProbeURLFromParts(scheme, host, path)
 
 	logger.Debugf("主动探测URL [%d/%d]: %s (规则: %s)",
 		index+1, total, probeURL, rule.Name)
 
 	// 发起HTTP请求
-	body, statusCode, err := httpClient.MakeRequest(probeURL)
+	headers := rule.GetHeaderMap()
+	body, statusCode, err := sc.makePathRequest(httpClient, probeURL, headers)
 	if err != nil {
 		logger.Debugf("主动探测请求失败: %s, 错误: %v", probeURL, err)
 		// 即使失败也要更新进度
@@ -1984,6 +2054,30 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 	if sc.progressTracker != nil {
 		sc.progressTracker.UpdateProgress("指纹识别进行中")
 	}
+}
+
+func (sc *ScanController) buildProbeURLFromParts(scheme, host, path string) string {
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	trimmed := path
+	if trimmed == "" {
+		trimmed = "/"
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, host, trimmed)
+}
+
+func (sc *ScanController) makePathRequest(client httpclient.HTTPClientInterface, target string, headers map[string]string) (string, int, error) {
+	if len(headers) > 0 {
+		if headerClient, ok := client.(httpclient.HeaderAwareClient); ok {
+			return headerClient.MakeRequestWithHeaders(target, headers)
+		}
+		logger.Debugf("HTTP客户端不支持自定义头部，使用默认请求: %s", target)
+	}
+	return client.MakeRequest(target)
 }
 
 // getPathRulesFromEngine 从指纹引擎获取包含path字段的规则

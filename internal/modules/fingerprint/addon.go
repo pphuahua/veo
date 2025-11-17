@@ -257,6 +257,12 @@ func (fa *FingerprintAddon) Enable() {
 	logger.Debugf("指纹识别已启用")
 }
 
+// Disable 暂停指纹识别
+func (fa *FingerprintAddon) Disable() {
+	fa.enabled = false
+	logger.Debugf("指纹识别已暂停")
+}
+
 // GetEngine 获取引擎实例
 func (fa *FingerprintAddon) GetEngine() *Engine {
 	return fa.engine
@@ -396,7 +402,7 @@ func (fa *FingerprintAddon) addNoCacheHeaders(f *proxy.Flow) {
 // addFingerprintCookieHeaders 为指纹识别添加自定义Cookie头（新增）
 func (fa *FingerprintAddon) addFingerprintCookieHeaders(f *proxy.Flow) {
 	// 添加指纹识别专用的Cookie头
-	f.Request.Header.Set("Cookie", "rememberMe=deleteMe;")
+	f.Request.Header.Set("Cookie", "rememberMe=1")
 
 	logger.Debugf("已为指纹识别请求添加Cookie头: %s", f.Request.URL.String())
 }

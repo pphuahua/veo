@@ -86,6 +86,17 @@ func SetWordlistPaths(paths []string) {
 	cache.mu.Unlock()
 }
 
+func GetWordlistPaths() []string {
+	wordlistMu.RLock()
+	defer wordlistMu.RUnlock()
+	if customWordlists == nil {
+		return nil
+	}
+	result := make([]string, len(customWordlists))
+	copy(result, customWordlists)
+	return result
+}
+
 func NewDictionaryManager() *DictionaryManager {
 	return &DictionaryManager{}
 }

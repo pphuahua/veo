@@ -38,6 +38,7 @@ type RequestConfig struct {
 	UserAgents      []string      // User-Agent列表（支持随机选择）
 	MaxBodySize     int           // 最大响应体大小
 	FollowRedirect  bool          // 是否跟随重定向
+	MaxRedirects    int           // 最大重定向次数
 	MaxConcurrent   int           // 最大并发数
 	ConnectTimeout  time.Duration // 连接超时时间
 	KeepAlive       time.Duration // 保持连接时间
@@ -115,10 +116,6 @@ type RequestProcessor struct {
 	// 新增：HTTP认证头部管理
 	customHeaders map[string]string  // CLI指定的自定义头部
 	authDetector  *auth.AuthDetector // 认证检测器
-
-	connectionRefusedThreshold int
-	connectionRefusedCountMap  map[string]int
-	blockedHosts               map[string]struct{}
 }
 
 // ===========================================
@@ -138,11 +135,8 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		titleExtractor: shared.NewTitleExtractor(),
 
 		// 新增：初始化认证头部管理
-		customHeaders:              make(map[string]string),
-		authDetector:               auth.NewAuthDetector(),
-		connectionRefusedThreshold: 5,
-		connectionRefusedCountMap:  make(map[string]int),
-		blockedHosts:               make(map[string]struct{}),
+		customHeaders: make(map[string]string),
+		authDetector:  auth.NewAuthDetector(),
 	}
 
 	return processor
@@ -384,10 +378,6 @@ func (rp *RequestProcessor) processWorkerResult(result WorkerResult, responses *
 
 // processURLWithStats 处理单个URL并更新统计
 func (rp *RequestProcessor) processURLWithStats(targetURL string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
-	if rp.isHostBlocked(targetURL) {
-		logger.Debugf("跳过已被屏蔽的目标: %s", targetURL)
-		return
-	}
 	// 请求延迟
 	if rp.config.Delay > 0 {
 		time.Sleep(rp.config.Delay)
@@ -404,10 +394,7 @@ func (rp *RequestProcessor) processURLWithStats(targetURL string, responses *[]*
 func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 	var response *interfaces.HTTPResponse
 	var err error
-	if rp.isHostBlocked(url) {
-		logger.Debugf("跳过已被屏蔽的目标: %s", url)
-		return nil
-	}
+	var redirectCount int
 
 	// 改进的重试逻辑（指数退避 + 抖动）
 	for attempt := 0; attempt <= rp.config.MaxRetries; attempt++ {
@@ -417,6 +404,27 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 
 		response, err = rp.makeRequest(url)
 		if err == nil {
+			// 处理 301/302 等重定向（仅在FollowRedirect开启时）
+			if rp.config.FollowRedirect && response != nil && isRedirectStatus(response.StatusCode) {
+				if redirectCount >= rp.config.MaxRedirects && rp.config.MaxRedirects > 0 {
+					logger.Warnf("超过最大重定向次数(%d): %s", rp.config.MaxRedirects, url)
+					return response
+				}
+				loc := getHeaderFirst(response.ResponseHeaders, "Location")
+				if loc == "" {
+					return response
+				}
+				nextURL := rp.resolveRedirectURL(url, loc)
+				if nextURL == "" {
+					return response
+				}
+				redirectCount++
+				logger.Debugf("跟随重定向 %d -> %s", response.StatusCode, nextURL)
+				url = nextURL
+				// 继续外层重试循环，但不递增 attempt（认为是同一次尝试的跳转）
+				attempt--
+				continue
+			}
 			return response
 		}
 
@@ -484,33 +492,8 @@ func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
 		logger.Debugf("[超时丢弃] URL: %s, 耗时: >%v, 错误: %v", rawURL, rp.config.Timeout, err)
 	} else if rp.isRedirectError(err) {
 		logger.Warnf("重定向处理失败: %s, 错误: %v", rawURL, err)
-	} else if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
-		logger.Warnf("请求被目标拒绝 (可能存在防护): %s, 错误: %v", rawURL, err)
-		rp.handleConnectionRefused(rawURL)
 	} else {
 		logger.Debugf("请求失败: %s, 错误: %v", rawURL, err)
-	}
-}
-
-func (rp *RequestProcessor) handleConnectionRefused(rawURL string) {
-	if !strings.Contains(rp.moduleContext, "dirscan") {
-		return
-	}
-	hostKey := rp.extractHostKey(rawURL)
-	if hostKey == "" {
-		return
-	}
-
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-
-	count := rp.connectionRefusedCountMap[hostKey] + 1
-	rp.connectionRefusedCountMap[hostKey] = count
-	if count >= rp.connectionRefusedThreshold {
-		if _, blocked := rp.blockedHosts[hostKey]; !blocked {
-			rp.blockedHosts[hostKey] = struct{}{}
-			logger.Warnf("检测到目标 %s 多次连接被拒绝，疑似存在防护设备（WAF），已忽略该目标的目录扫描", hostKey)
-		}
 	}
 }
 
@@ -952,6 +935,45 @@ func (rp *RequestProcessor) setRequestHeaders(h *fasthttp.RequestHeader) {
 	}
 }
 
+func isRedirectStatus(code int) bool {
+	return code == 301 || code == 302 || code == 303 || code == 307 || code == 308
+}
+
+func getHeaderFirst(headers map[string][]string, key string) string {
+	if headers == nil {
+		return ""
+	}
+	if vals, ok := headers[key]; ok && len(vals) > 0 {
+		return vals[0]
+	}
+	lowerKey := strings.ToLower(key)
+	for k, vals := range headers {
+		if strings.ToLower(k) == lowerKey && len(vals) > 0 {
+			return vals[0]
+		}
+	}
+	return ""
+}
+
+func (rp *RequestProcessor) resolveRedirectURL(baseURL, location string) string {
+	loc := strings.TrimSpace(location)
+	if loc == "" {
+		return ""
+	}
+	if strings.HasPrefix(loc, "http://") || strings.HasPrefix(loc, "https://") {
+		return loc
+	}
+	base, err := neturl.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	ref, err := neturl.Parse(loc)
+	if err != nil {
+		return ""
+	}
+	return base.ResolveReference(ref).String()
+}
+
 // ===========================================
 // 配置数据获取方法
 // ===========================================
@@ -966,6 +988,7 @@ func (rp *RequestProcessor) getDefaultHeaders() map[string]string {
 		"Accept-Encoding":           "gzip, deflate",
 		"Connection":                "keep-alive",
 		"Upgrade-Insecure-Requests": "1",
+		"Cookie":                    "rememberMe=1",
 	}
 
 	// 合并认证头部
@@ -1042,25 +1065,7 @@ func (rp *RequestProcessor) convertToHTTPResponse(resp *fasthttp.Response) *http
 		httpResp.Header.Add(string(key), string(value))
 	})
 
-	// 转换Cookie（如果有）
-	resp.Header.VisitAllCookie(func(key, value []byte) {
-		if cookie := rp.parseCookieFromHeader(string(key), string(value)); cookie != nil {
-			if httpResp.Cookies() == nil {
-				// 初始化cookies切片
-				httpResp.Header.Add("Set-Cookie", cookie.String())
-			}
-		}
-	})
-
 	return httpResp
-}
-
-// parseCookieFromHeader 从头部解析Cookie
-func (rp *RequestProcessor) parseCookieFromHeader(name, value string) *http.Cookie {
-	return &http.Cookie{
-		Name:  name,
-		Value: value,
-	}
 }
 
 // ===========================================
@@ -1268,6 +1273,7 @@ func getDefaultConfig() *RequestConfig {
 	}
 
 	connectTimeout := 5 * time.Second // 默认连接超时时间
+	maxRedirects := 5
 
 	randomUserAgent := true
 	if cfg.RandomUA != nil {
@@ -1287,6 +1293,7 @@ func getDefaultConfig() *RequestConfig {
 		UserAgents:      userAgents,
 		MaxBodySize:     10 * 1024 * 1024, // 10MB
 		FollowRedirect:  false,            // 默认不跟随重定向
+		MaxRedirects:    maxRedirects,
 		MaxConcurrent:   maxConcurrent,
 		ConnectTimeout:  connectTimeout,
 		RandomUserAgent: randomUserAgent,
@@ -1326,7 +1333,6 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 	atomic.AddInt64(&stats.ProcessedCount, 1)
 
 	if response != nil {
-		rp.markHostSuccess(response.URL)
 		responsesMu.Lock()
 		*responses = append(*responses, response)
 		responsesMu.Unlock()
@@ -1348,57 +1354,6 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 			rp.statsUpdater.IncrementTimeouts()
 		}
 	}
-}
-
-func (rp *RequestProcessor) ResetConnectionRefusedState() {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	rp.connectionRefusedCountMap = make(map[string]int)
-	rp.blockedHosts = make(map[string]struct{})
-}
-
-func (rp *RequestProcessor) markHostSuccess(rawURL string) {
-	hostKey := rp.extractHostKey(rawURL)
-	if hostKey == "" {
-		return
-	}
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	delete(rp.connectionRefusedCountMap, hostKey)
-	delete(rp.blockedHosts, hostKey)
-}
-
-func (rp *RequestProcessor) isHostBlocked(rawURL string) bool {
-	hostKey := rp.extractHostKey(rawURL)
-	if hostKey == "" {
-		return false
-	}
-	rp.mu.RLock()
-	defer rp.mu.RUnlock()
-	_, blocked := rp.blockedHosts[hostKey]
-	return blocked
-}
-
-func (rp *RequestProcessor) extractHostKey(rawURL string) string {
-	if rawURL == "" {
-		return ""
-	}
-	if parsed, err := neturl.Parse(rawURL); err == nil && parsed.Host != "" {
-		return strings.ToLower(parsed.Host)
-	}
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return ""
-	}
-	parts := strings.Split(trimmed, "//")
-	candidate := trimmed
-	if len(parts) == 2 {
-		candidate = parts[1]
-	}
-	if idx := strings.Index(candidate, "/"); idx != -1 {
-		candidate = candidate[:idx]
-	}
-	return strings.ToLower(candidate)
 }
 
 // finalizeProcessing 完成处理

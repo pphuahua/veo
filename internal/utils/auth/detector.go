@@ -1,9 +1,9 @@
 package auth
 
 import (
-	"veo/internal/core/logger"
 	"net/http"
 	"strings"
+	"veo/internal/core/logger"
 )
 
 // AuthDetector 认证检测器
@@ -57,19 +57,6 @@ func (ad *AuthDetector) DetectAuthRequirements(resp *http.Response, url string) 
 		// 标记需要该头部，但值为空（需要用户提供）
 		authHeaders[headerName] = ""
 		logger.Debugf("检测到需要自定义认证头部: %s (需要用户提供)", headerName)
-	}
-
-	// 检测Set-Cookie中的认证信息
-	for _, cookie := range resp.Cookies() {
-		if ad.isAuthCookie(cookie.Name) {
-			cookieValue := cookie.Name + "=" + cookie.Value
-			if existing := authHeaders["Cookie"]; existing != "" {
-				authHeaders["Cookie"] = existing + "; " + cookieValue
-			} else {
-				authHeaders["Cookie"] = cookieValue
-			}
-			logger.Debugf("发现认证Cookie: %s", cookieValue)
-		}
 	}
 
 	// 记录检测到的认证方案
@@ -181,27 +168,6 @@ func (ad *AuthDetector) isCustomAuthHeader(headerName string) bool {
 	headerNameLower := strings.ToLower(headerName)
 	for _, authHeaderName := range customAuthHeaderNames {
 		if headerNameLower == authHeaderName {
-			return true
-		}
-	}
-	return false
-}
-
-// isAuthCookie 检测是否为认证相关的Cookie
-func (ad *AuthDetector) isAuthCookie(name string) bool {
-	authCookieNames := []string{
-		"session", "sessionid", "sid", "jsessionid", "phpsessid",
-		"auth", "token", "jwt", "access_token", "csrf_token",
-		"csrftoken", "xsrf_token", "xsrf-token", "csrf-token",
-		"laravel_session", "connect.sid", "express.sid",
-		"aspnet_sessionid", "asp.net_sessionid", "viewstate",
-		"login", "user", "userid", "username", "remember",
-		"ticket", "saml", "oauth", "bearer", "api_key", "apikey",
-	}
-
-	name = strings.ToLower(name)
-	for _, authName := range authCookieNames {
-		if strings.Contains(name, authName) {
 			return true
 		}
 	}

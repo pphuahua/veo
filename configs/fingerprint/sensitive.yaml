@@ -1,20 +1,3 @@
-OSSKey泄漏:
-  dsl:
-  - contains(body, 'ACCESSID')
-  - contains(body, 'ACCESSKEY')
-  - contains(body, 'accessKeyId')
-  - contains(body, 'accessKeySecret')
-  - contains(body, 'ALIYUN_ACCESS_ID')
-  - contains(body, 'ALIYUN_ACCESS_KEY')
-  - contains(body, 'securityToken')
-  - contains(body, 'SSOusername')
-  - contains(body, 'SSOpassword')
-  - contains(body, 'oss://')
-  - contains(body, 'appsecret')
-  - regex(body,'((?i)((access_key|appsecret|app_secret|access_token|password|secretkey|accesskey|accesskeyid|accesskeysecret|secret_key|pwd|test_user|admin_pass|admin_user|algolia_admin_key|algolia_api_key|alias_pass|alicloud_access_key|amazon_secret_access_key|amazonaws|ansible_vault_password|aos_key|api_key|api_key_secret|api_key_sid|api_secret|api.googlemaps AIza|apidocs|apikey|apiSecret|app_debug|app_id|app_key|app_log_level|app_secret|appkey|appkeysecret|application_key|appsecret|appspot|auth_token|authorizationToken|authsecret|aws_access|aws_access_key_id|aws_bucket|aws_key|aws_secret|aws_secret_key|aws_token|AWSSecretKey|b2_app_key|bashrc password|bintray_apikey|bintray_gpg_password|bintray_key|bintraykey|bluemix_api_key|bluemix_pass|browserstack_access_key|bucket_password|bucketeer_aws_access_key_id|bucketeer_aws_secret_access_key|built_branch_deploy_key|bx_password|cache_driver|cache_s3_secret_key|cattle_access_key|cattle_secret_key|certificate_password|ci_deploy_password|client_secret|client_zpk_secret_key|clojars_password|cloud_api_key|cloud_watch_aws_access_key|cloudant_password|cloudflare_api_key|cloudflare_auth_key|cloudinary_api_secret|cloudinary_name|codecov_token|config|conn.login|connectionstring|consumer_key|consumer_secret|credentials|cypress_record_key|database_password|database_schema_test|datadog_api_key|datadog_app_key|db_password|db_server|db_username|dbpasswd|dbpassword|dbuser|deploy_password|digitalocean_ssh_key_body|digitalocean_ssh_key_ids|docker_hub_password|docker_key|docker_pass|docker_passwd|docker_password|dockerhub_password|dockerhubpassword|dot-files|dotfiles|droplet_travis_password|dynamoaccesskeyid|dynamosecretaccesskey|elastica_host|elastica_port|elasticsearch_password|encryption_key|encryption_password|env.heroku_api_key|env.sonatype_password|eureka.awssecretkey)[a-z0-9_.]{0,25})(=|>|:=|:|<=|=>|:).{0,5}['\"\ ]([0-9a-zA-Z-_=]{12,64})['\"\ ])')
-  - regex(body, '(LTAI[A-Za-z0-9]{12,20})')
-  - regex(body, '(['\"\ ](GOOG[\w\W]{10,30})['\"\ ]|(['\"\ ]AZ[A-Za-z0-9]{34,40}['\"\ ])|(['\"\ ]AKID[A-Za-z0-9]{13,20}['\"\ ])|(['\"\ ]AKIA[A-Za-z0-9]{16}['\"\ ])|(['\"\ ][a-zA-Z0-9]{8}(-[a-zA-Z0-9]{4}){3}-[a-zA-Z0-9]{12}['\"\ ])|(['\"\ ]OCID[A-Za-z0-9]{10,40}['\"\ ])|(['\"\ ]LTAI[A-Za-z0-9]{12,20}['\"\ ])|(['\"\ ][A-Z0-9]{20}$['\"\ ])|(['\"\ ]JDC_[A-Z0-9]{28,32}['\"\ ])|(['\"\ ]AK[A-Za-z0-9]{10,40}['\"\ ])|(['\"\ ]UC[A-Za-z0-9]{10,40}['\"\ ])|(['\"\ ]QY[A-Za-z0-9]{10,40}['\"\ ])|(['\"\ ]AKLT[a-zA-Z0-9-_]{16,28}['\"\ ])|(['\"\ ]LTC[A-Za-z0-9]{10,60}['\"\ ])|(['\"\ ]YD[A-Za-z0-9]{10,60}['\"\ ])|(['\"\ ]CTC[A-Za-z0-9]{10,60}['\"\ ])|(['\"\ ]YYT[A-Za-z0-9]{10,60}['\"\ ])|(['\"\ ]YY[A-Za-z0-9]{10,40}['\"\ ])|(['\"\ ]CI[A-Za-z0-9]{10,40}['\"\ ])|(['\"\ ]gcore[A-Za-z0-9]{10,30}['\"\ ]))')
-
 UCKey泄漏:
   dsl:
   - contains(body, 'UC_DBHOST')
@@ -235,25 +218,6 @@ php-webshell:
   - regex(body, '(?i)cmdshell')
   - regex(body, '(?i)b4tm4n')
 
-亚马逊云:
-  dsl:
-  - regex(body, '(AKIA[A-Za-z0-9]{16})')
-
-Google-Cloud:
-  dsl:
-  - regex(body, '(GOOG[\w\W]{10,30})')
-
-IBM-Cloud:
-  dsl:
-  - regex(body, '(IBM[A-Za-z0-9]{10,40})')
-  - regex(body, '([a-zA-Z0-9]{8}(-[a-zA-Z0-9]{4}){3}-[a-zA-Z0-9]{12}$)')
-
-腾讯云:
-  dsl:
-  - regex(body, '(IBM[A-Za-z0-9]{10,40})')
-  - regex(body, '([a-zA-Z0-9]{8}(-[a-zA-Z0-9]{4}){3}-[a-zA-Z0-9]{12}$)')
-  - regex(body, '(AKID[A-Za-z0-9]{13,20})')
-
 阿里云:
   dsl:
   - regex(body, '(LTAI[A-Za-z0-9]{12,20})')
@@ -261,14 +225,6 @@ IBM-Cloud:
 字节跳动火山引擎:
   dsl:
   - regex(body, '(AKLT[a-zA-Z0-9-_]{0,252})')
-
-UCloud:
-  dsl:
-  - regex(body, '(UC[A-Za-z0-9]{10,40})')
-
-一云通:
-  dsl:
-  - regex(body, '(YYT[A-Za-z0-9]{10,60})')
 
 G-Core-Labs:  
   dsl:
@@ -304,4 +260,8 @@ email:
 
 疑似struts框架:
   dsl:
-    - "contains(body, '.action')"
+    - contains(body, '.action')
+
+thinkphp框架报错:
+  dsl:
+    - contains_all(body, '控制器不存在','HTTP_ACCEPT_LANGUAGE')

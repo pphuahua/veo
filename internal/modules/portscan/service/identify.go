@@ -181,7 +181,7 @@ func fallbackHTTP(host string, port int, timeout time.Duration) bool {
 	}
 	ua := useragent.Pick()
 	if ua == "" {
-		ua = "veo-HTTPClient/1.0"
+		ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0"
 	}
 	req := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n", requestHost, ua)
 	if _, err := conn.Write([]byte(req)); err != nil {

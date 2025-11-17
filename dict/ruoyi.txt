@@ -1,5 +1,14 @@
 /system/duplicate/check
+/system/user/1
+/system/user/50
+/system/user/100
+/system/user/300
+/system/dept/list
+/system/dept/1
+/system/getInfo
+/system/dept/100
 /system/fillRule/add
+/system/user/changeStatus
 /system/fillRule/delete
 /system/fillRule/deleteBatch
 /system/fillRule/edit

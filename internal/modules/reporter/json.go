@@ -13,25 +13,49 @@ import (
 	"veo/internal/modules/fingerprint"
 )
 
-type SDKResult struct {
-	Summary            SDKSummary      `json:"summary"`
-	DirscanResults     []SDKPageResult `json:"dirscan_results,omitempty"`
-	FingerprintTargets []SDKPageResult `json:"fingerprint_results,omitempty"`
-	PortscanResults    []SDKPortResult `json:"portscan_results,omitempty"`
+// CombinedAPIResponse 统一的API/CLI JSON响应结构
+type CombinedAPIResponse struct {
+	Code        int             `json:"code"`
+	Message     string          `json:"message,omitempty"`
+	PortCount   int             `json:"port_count"`
+	FingerCount int             `json:"finger_count"`
+	DirCount    int             `json:"dirscan_count"`
+	TimeUsedMs  int64           `json:"time_used"`
+	Data        CombinedAPIData `json:"data"`
 }
 
-type SDKSummary struct {
-	Total                   int   `json:"total"`
-	DirscanCount            int   `json:"dirscan_count"`
-	FingerprintCount        int   `json:"fingerprint_count"`
-	PortscanCount           int   `json:"portscan_count"`
-	DurationMs              int64 `json:"duration_ms"`
-	FingerprintRules        int   `json:"fingerprint_rules"`
-	DirTargetsCount         int   `json:"dir_targets_count"`
-	FingerprintTargetsCount int   `json:"fingerprint_targets_count"`
+type CombinedAPIData struct {
+	Portscan    []PortEntry          `json:"portscan,omitempty"`
+	Fingerprint []FingerprintAPIPage `json:"fingerprint,omitempty"`
+	Dirscan     []DirscanAPIPage     `json:"dirscan,omitempty"`
 }
 
-// SDKPortResult 端口扫描结果（用于合并报告）
+type PortEntry struct {
+	IP      string `json:"ip"`
+	Port    int    `json:"port"`
+	Service string `json:"service,omitempty"`
+}
+
+type FingerprintAPIPage struct {
+	URL         string                      `json:"url"`
+	StatusCode  int                         `json:"status_code"`
+	Title       string                      `json:"title,omitempty"`
+	ContentType string                      `json:"content_type,omitempty"`
+	DurationMs  int64                       `json:"duration_ms"`
+	Matches     []SDKFingerprintMatchOutput `json:"matches,omitempty"`
+}
+
+type DirscanAPIPage struct {
+	URL           string                      `json:"url"`
+	StatusCode    int                         `json:"status_code"`
+	Title         string                      `json:"title,omitempty"`
+	ContentLength int64                       `json:"content_length"`
+	ContentType   string                      `json:"content_type,omitempty"`
+	DurationMs    int64                       `json:"duration_ms"`
+	Fingerprints  []SDKFingerprintMatchOutput `json:"fingerprints,omitempty"`
+}
+
+// SDKPortResult 端口扫描结果（供内部复用）
 type SDKPortResult struct {
 	IP    string         `json:"ip"`
 	Ports []SDKPortEntry `json:"ports"`
@@ -40,16 +64,6 @@ type SDKPortResult struct {
 type SDKPortEntry struct {
 	Port    int    `json:"port"`
 	Service string `json:"service,omitempty"`
-}
-
-type SDKPageResult struct {
-	URL           string                      `json:"url"`
-	StatusCode    int                         `json:"status_code"`
-	Title         string                      `json:"title"`
-	ContentLength int64                       `json:"content_length"`
-	DurationMs    int64                       `json:"duration_ms"`
-	ContentType   string                      `json:"content_type,omitempty"`
-	Fingerprints  []SDKFingerprintMatchOutput `json:"fingerprints,omitempty"`
 }
 
 type SDKFingerprintMatchOutput struct {
@@ -82,54 +96,14 @@ func NewCustomJSONReportGenerator(outputPath string) *JSONReportGenerator {
 // GenerateDirscanReport 生成目录扫描JSON报告
 func (jrg *JSONReportGenerator) GenerateDirscanReport(filterResult *interfaces.FilterResult, target string, scanParams map[string]interface{}) (string, error) {
 	dirPages := extractResponses(filterResult)
-	result := jrg.buildSDKResult(dirPages, nil, nil, nil, nil, scanParams)
-	return jrg.saveSDKResult(result, target, "dirscan")
+	resp := jrg.buildCombinedAPIResponse(dirPages, nil, nil, nil, nil, scanParams)
+	return jrg.saveCombinedResponse(resp, target, "dirscan")
 }
 
 // GenerateFingerprintReport 生成指纹识别JSON报告
 func (jrg *JSONReportGenerator) GenerateFingerprintReport(responses []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, target string, scanParams map[string]interface{}) (string, error) {
-	result := jrg.buildSDKResult(nil, responses, matches, stats, nil, scanParams)
-	return jrg.saveSDKResult(result, target, "fingerprint")
-}
-
-// saveSDKResult 保存与SDK一致的JSON报告
-func (jrg *JSONReportGenerator) saveSDKResult(result *SDKResult, target string, scanType string) (string, error) {
-	if result == nil {
-		return "", fmt.Errorf("报告数据为空")
-	}
-
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("JSON序列化失败: %v", err)
-	}
-
-	var filePath string
-
-	if jrg.outputPath != "" {
-		filePath = jrg.outputPath
-		outputDir := filepath.Dir(filePath)
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return "", fmt.Errorf("创建输出目录失败: %v", err)
-		}
-	} else {
-		timestamp := time.Now().Format("20060102_150405")
-		safeName := sanitizeFilename(target)
-		fileName := fmt.Sprintf("%s_%s_%s.json", scanType, safeName, timestamp)
-
-		outputDir := "./reports"
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return "", fmt.Errorf("创建输出目录失败: %v", err)
-		}
-
-		filePath = filepath.Join(outputDir, fileName)
-	}
-
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return "", fmt.Errorf("写入JSON文件失败: %v", err)
-	}
-
-	logger.Debugf("JSON报告已生成: %s", filePath)
-	return filePath, nil
+	resp := jrg.buildCombinedAPIResponse(nil, responses, matches, stats, nil, scanParams)
+	return jrg.saveCombinedResponse(resp, target, "fingerprint")
 }
 
 // GenerateJSONDirscanReport 生成目录扫描JSON报告的公共接口
@@ -158,7 +132,7 @@ func GenerateCustomJSONFingerprintReport(responses []interfaces.HTTPResponse, ma
 
 func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, scanParams map[string]interface{}) (string, error) {
 	generator := NewJSONReportGenerator()
-	result := generator.buildSDKResult(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
+	result := generator.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("JSON序列化失败: %v", err)
@@ -169,8 +143,8 @@ func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages [
 // GenerateCustomCombinedJSON 生成合并JSON报告（写入指定文件）
 func GenerateCustomCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, target string, scanParams map[string]interface{}, outputPath string) (string, error) {
 	jrg := NewCustomJSONReportGenerator(outputPath)
-	result := jrg.buildSDKResult(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
-	return jrg.saveSDKResult(result, target, "combined")
+	result := jrg.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
+	return jrg.saveCombinedResponse(result, target, "combined")
 }
 
 // extractResponses 提取过滤结果中的有效页面
@@ -189,47 +163,96 @@ func extractResponses(filterResult *interfaces.FilterResult) []interfaces.HTTPRe
 	return copied
 }
 
-// buildSDKResult 根据输入数据构建与SDK一致的结果结构
-func (jrg *JSONReportGenerator) buildSDKResult(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, scanParams map[string]interface{}) *SDKResult {
-	dirResults := makeDirscanPageResults(dirPages)
-	fpResults := makeFingerprintPageResults(fpPages, matches)
-	pr := portResults
+// buildCombinedAPIResponse 构建统一的API/CLI JSON响应结构
+func (jrg *JSONReportGenerator) buildCombinedAPIResponse(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch, stats *fingerprint.Statistics, portResults []SDKPortResult, scanParams map[string]interface{}) CombinedAPIResponse {
+	dirPagesAPI := makeDirscanPageResults(dirPages)
+	fpPagesAPI := makeFingerprintPageResults(fpPages, matches)
+
+	// 展开端口结果为扁平结构
+	var portEntries []PortEntry
+	for _, pr := range portResults {
+		for _, p := range pr.Ports {
+			portEntries = append(portEntries, PortEntry{
+				IP:      pr.IP,
+				Port:    p.Port,
+				Service: strings.TrimSpace(p.Service),
+			})
+		}
+	}
 
 	duration := time.Since(jrg.startTime).Milliseconds()
 
-	summary := SDKSummary{
-		Total:                   len(dirResults) + len(fpResults) + len(pr),
-		DirscanCount:            len(dirResults),
-		FingerprintCount:        len(fpResults),
-		PortscanCount:           len(pr),
-		DurationMs:              duration,
-		FingerprintRules:        rulesLoaded(stats, scanParams),
-		DirTargetsCount:         intFromParams(scanParams, "dir_targets_count", len(dirResults)),
-		FingerprintTargetsCount: intFromParams(scanParams, "fingerprint_targets_count", len(fpResults)),
+	resp := CombinedAPIResponse{
+		Code:        0,
+		Message:     "ok",
+		PortCount:   len(portEntries),
+		FingerCount: len(fpPagesAPI),
+		DirCount:    len(dirPagesAPI),
+		TimeUsedMs:  duration,
+		Data: CombinedAPIData{
+			Portscan:    portEntries,
+			Fingerprint: fpPagesAPI,
+			Dirscan:     dirPagesAPI,
+		},
 	}
 
-	return &SDKResult{
-		Summary:            summary,
-		DirscanResults:     dirResults,
-		FingerprintTargets: fpResults,
-		PortscanResults:    pr,
+	// 保持兼容：若需要总数可用 summary.Total
+	return resp
+}
+
+func (jrg *JSONReportGenerator) saveCombinedResponse(resp CombinedAPIResponse, target, scanType string) (string, error) {
+	data, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("JSON序列化失败: %v", err)
 	}
+
+	var filePath string
+
+	if jrg.outputPath != "" {
+		filePath = jrg.outputPath
+		outputDir := filepath.Dir(filePath)
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return "", fmt.Errorf("创建输出目录失败: %v", err)
+		}
+	} else {
+		timestamp := time.Now().Format("20060102_150405")
+		safeName := sanitizeFilename(target)
+		prefix := scanType
+		if prefix == "" {
+			prefix = "combined"
+		}
+		fileName := fmt.Sprintf("%s_%s_%s.json", prefix, safeName, timestamp)
+
+		outputDir := "./reports"
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return "", fmt.Errorf("创建输出目录失败: %v", err)
+		}
+
+		filePath = filepath.Join(outputDir, fileName)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return "", fmt.Errorf("写入JSON文件失败: %v", err)
+	}
+
+	logger.Debugf("JSON报告已生成: %s", filePath)
+	return filePath, nil
 }
 
 // makeDirscanPageResults 构造目录扫描结果列表
-func makeDirscanPageResults(pages []interfaces.HTTPResponse) []SDKPageResult {
+func makeDirscanPageResults(pages []interfaces.HTTPResponse) []DirscanAPIPage {
 	if len(pages) == 0 {
 		return nil
 	}
 
-	results := make([]SDKPageResult, 0, len(pages))
+	results := make([]DirscanAPIPage, 0, len(pages))
 	for _, page := range pages {
 		length := page.ContentLength
 		if length == 0 {
 			length = page.Length
 		}
 
-		results = append(results, SDKPageResult{
+		results = append(results, DirscanAPIPage{
 			URL:           page.URL,
 			StatusCode:    page.StatusCode,
 			Title:         page.Title,
@@ -244,13 +267,13 @@ func makeDirscanPageResults(pages []interfaces.HTTPResponse) []SDKPageResult {
 }
 
 // makeFingerprintPageResults 构造指纹识别结果列表
-func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch) []SDKPageResult {
+func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fingerprint.FingerprintMatch) []FingerprintAPIPage {
 	if len(pages) == 0 && len(matches) == 0 {
 		return nil
 	}
 
 	matchMap := groupMatchesByURL(matches)
-	results := make([]SDKPageResult, 0, len(pages)+len(matchMap))
+	results := make([]FingerprintAPIPage, 0, len(pages)+len(matchMap))
 	seen := make(map[string]bool, len(pages))
 
 	for _, page := range pages {
@@ -264,14 +287,13 @@ func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fing
 		if len(fps) > 0 {
 			existing = mergeFingerprintOutputs(existing, fps)
 		}
-		results = append(results, SDKPageResult{
-			URL:           page.URL,
-			StatusCode:    page.StatusCode,
-			Title:         page.Title,
-			ContentLength: length,
-			DurationMs:    page.Duration,
-			ContentType:   page.ContentType,
-			Fingerprints:  existing,
+		results = append(results, FingerprintAPIPage{
+			URL:         page.URL,
+			StatusCode:  page.StatusCode,
+			Title:       page.Title,
+			ContentType: page.ContentType,
+			DurationMs:  page.Duration,
+			Matches:     existing,
 		})
 		seen[page.URL] = true
 	}
@@ -284,9 +306,9 @@ func makeFingerprintPageResults(pages []interfaces.HTTPResponse, matches []*fing
 		if len(fps) == 0 {
 			continue
 		}
-		results = append(results, SDKPageResult{
-			URL:          url,
-			Fingerprints: fps,
+		results = append(results, FingerprintAPIPage{
+			URL:     url,
+			Matches: fps,
 		})
 	}
 
@@ -342,51 +364,25 @@ func mergeFingerprintOutputs(base []SDKFingerprintMatchOutput, extra []SDKFinger
 		return merged
 	}
 
-	existing := make(map[string]struct{}, len(base))
-	for _, item := range base {
-		key := item.RuleName + "|" + item.RuleContent + "|" + item.Snippet
-		existing[key] = struct{}{}
+	keyIndex := make(map[string]int, len(base))
+	for idx, item := range base {
+		key := item.RuleName + "|" + item.RuleContent
+		keyIndex[key] = idx
 	}
 
 	for _, item := range extra {
-		key := item.RuleName + "|" + item.RuleContent + "|" + item.Snippet
-		if _, ok := existing[key]; ok {
+		key := item.RuleName + "|" + item.RuleContent
+		if idx, ok := keyIndex[key]; ok {
+			if base[idx].Snippet == "" && item.Snippet != "" {
+				base[idx].Snippet = item.Snippet
+			}
 			continue
 		}
+		keyIndex[key] = len(base)
 		base = append(base, item)
 	}
 
 	return base
-}
-
-// rulesLoaded 计算指纹规则数量
-func rulesLoaded(stats *fingerprint.Statistics, params map[string]interface{}) int {
-	if stats != nil {
-		return stats.RulesLoaded
-	}
-	return intFromParams(params, "fingerprint_rules_loaded", 0)
-}
-
-// intFromParams 从参数映射中提取整数值
-func intFromParams(params map[string]interface{}, key string, fallback int) int {
-	if params == nil {
-		return fallback
-	}
-	value, ok := params[key]
-	if !ok {
-		return fallback
-	}
-
-	switch v := value.(type) {
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return fallback
-	}
 }
 
 // sanitizeFilename 清理文件名中的非法字符

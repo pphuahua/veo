@@ -27,6 +27,10 @@ type ProbeResult struct {
 	Matches  []*FingerprintMatch
 }
 
+type headerAwareHTTPClient interface {
+	MakeRequestWithHeaders(string, map[string]string) (string, int, error)
+}
+
 // ===========================================
 // 引擎实现
 // ===========================================
@@ -941,17 +945,33 @@ func (e *Engine) performActiveProbing(baseURL string, httpClient interface{}) {
 	// 获取所有包含path字段的规则
 	e.mu.RLock()
 	var pathRules []*FingerprintRule
+	var headerOnlyRules []*FingerprintRule
+	totalPaths := 0
 	for _, rule := range e.rules {
-		if rule.Path != "" {
+		if rule == nil {
+			continue
+		}
+		if rule.HasPaths() {
 			pathRules = append(pathRules, rule)
+			totalPaths += len(rule.Paths)
+			continue
+		}
+		if rule.HasHeaders() {
+			headerOnlyRules = append(headerOnlyRules, rule)
 		}
 	}
 	e.mu.RUnlock()
 
-	logger.Debugf("找到 %d 个包含path字段的规则", len(pathRules))
-	if len(pathRules) == 0 {
-		logger.Debug("没有包含path字段的规则，跳过主动探测")
+	if totalPaths == 0 && len(headerOnlyRules) == 0 {
+		logger.Debug("没有需要主动探测的规则，跳过主动探测")
 		return
+	}
+
+	if totalPaths > 0 {
+		logger.Debugf("找到 %d 个包含path字段的规则，共 %d 条路径", len(pathRules), totalPaths)
+	}
+	if len(headerOnlyRules) > 0 {
+		logger.Debugf("找到 %d 个包含header字段的规则需要主动探测", len(headerOnlyRules))
 	}
 
 	// 解析baseURL获取协议和主机
@@ -966,63 +986,82 @@ func (e *Engine) performActiveProbing(baseURL string, httpClient interface{}) {
 
 	// 遍历所有path规则进行探测
 	for _, rule := range pathRules {
-		// 构造完整的探测URL
-		probeURL := fmt.Sprintf("%s://%s%s", scheme, host, rule.Path)
+		e.performRuleProbing(rule, scheme, host, baseURL, httpClient)
+	}
 
-		logger.Debugf("主动探测URL: %s (规则: %s)", probeURL, rule.Name)
-
-		// 发起HTTP请求
-		if client, ok := httpClient.(interface {
-			MakeRequest(string) (string, int, error)
-		}); ok {
-			body, statusCode, err := client.MakeRequest(probeURL)
-			if err != nil {
-				logger.Debugf("主动探测请求失败: %s, 错误: %v", probeURL, err)
-				continue
-			}
-
-			// 构造模拟的HTTPResponse用于DSL匹配
-			response := &HTTPResponse{
-				URL:           probeURL,
-				Method:        "GET",
-				StatusCode:    statusCode,
-				Headers:       make(map[string][]string), // 简化版，暂不解析响应头
-				Body:          body,
-				ContentType:   "text/html", // 简化假设
-				ContentLength: int64(len(body)),
-				Server:        "",
-				Title:         extractTitleFromHTML(body),
-			}
-
-			// 创建DSL上下文（支持主动探测）
-			ctx := e.createDSLContextWithClient(response, httpClient, baseURL)
-
-			// 尝试匹配当前规则
-			if match := e.matchRule(rule, ctx); match != nil {
-				// 更新统计和保存匹配结果
-				atomic.AddInt64(&e.stats.MatchedRequests, 1)
-				e.mu.Lock()
-				e.stats.LastMatchTime = time.Now()
-				e.matches = append(e.matches, match)
-				e.mu.Unlock()
-
-				// [关键修改] 实时输出：每完成一个URL的探测和匹配后，立即输出
-				// 将匹配结果包装成切片传递给输出函数
-				e.outputFingerprintMatches([]*FingerprintMatch{match}, response, "主动探测")
-
-				logger.Debugf("主动探测实时输出: %s (规则: %s)", probeURL, rule.Name)
-			}
-		} else {
-			// httpClient不支持MakeRequest方法，跳过此次探测
-			logger.Debugf("HTTP客户端不支持MakeRequest方法，跳过探测: %s", probeURL)
-			continue
-		}
+	// 处理仅包含header的规则（默认探测根路径）
+	for _, rule := range headerOnlyRules {
+		defaultURL := buildProbeURLFromParts(scheme, host, "/")
+		e.performRuleRequest(rule, defaultURL, baseURL, httpClient, true)
 	}
 
 	// [新增] 404页面指纹识别（保持独立调用）
 	e.perform404PageProbing(baseURL, httpClient)
 
-	logger.Debugf("主动探测完成: %s (共探测 %d 个路径)", baseURL, len(pathRules))
+	logger.Debugf("主动探测完成: %s (共探测 %d 条路径)", baseURL, totalPaths)
+}
+
+func (e *Engine) performRuleProbing(rule *FingerprintRule, scheme, host, baseURL string, httpClient interface{}) {
+	if rule == nil {
+		return
+	}
+	headers := rule.GetHeaderMap()
+	for _, rawPath := range rule.Paths {
+		probePath := strings.TrimSpace(rawPath)
+		if probePath == "" {
+			continue
+		}
+		probeURL := buildProbeURLFromParts(scheme, host, probePath)
+		e.performRuleRequest(rule, probeURL, baseURL, httpClient, false, headers)
+	}
+}
+
+func (e *Engine) performRuleRequest(rule *FingerprintRule, probeURL, baseURL string, httpClient interface{}, logDefault bool, headerArgs ...map[string]string) {
+	if rule == nil {
+		return
+	}
+	var headers map[string]string
+	if len(headerArgs) > 0 && headerArgs[0] != nil {
+		headers = headerArgs[0]
+	} else if rule.HasHeaders() {
+		headers = rule.GetHeaderMap()
+	}
+
+	if logDefault {
+		logger.Debugf("主动探测URL: %s (Header规则: %s)", probeURL, rule.Name)
+	} else {
+		logger.Debugf("主动探测URL: %s (规则: %s)", probeURL, rule.Name)
+	}
+
+	body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, probeURL, headers)
+	if err != nil {
+		logger.Debugf("主动探测请求失败: %s, 错误: %v", probeURL, err)
+		return
+	}
+
+	response := &HTTPResponse{
+		URL:           probeURL,
+		Method:        "GET",
+		StatusCode:    statusCode,
+		Headers:       make(map[string][]string),
+		Body:          body,
+		ContentType:   "text/html",
+		ContentLength: int64(len(body)),
+		Server:        "",
+		Title:         extractTitleFromHTML(body),
+	}
+
+	ctx := e.createDSLContextWithClient(response, httpClient, baseURL)
+	if match := e.matchRule(rule, ctx); match != nil {
+		atomic.AddInt64(&e.stats.MatchedRequests, 1)
+		e.mu.Lock()
+		e.stats.LastMatchTime = time.Now()
+		e.matches = append(e.matches, match)
+		e.mu.Unlock()
+
+		e.outputFingerprintMatches([]*FingerprintMatch{match}, response, "主动探测")
+		logger.Debugf("主动探测实时输出: %s (规则: %s)", probeURL, rule.Name)
+	}
 }
 
 // perform404PageProbing 执行404页面指纹识别
@@ -1129,13 +1168,44 @@ func (e *Engine) match404PageFingerprints(response *HTTPResponse, httpClient int
 	return matches
 }
 
+func makeRequestWithOptionalHeaders(httpClient interface{}, targetURL string, headers map[string]string) (string, int, error) {
+	if len(headers) > 0 {
+		if headerClient, ok := httpClient.(headerAwareHTTPClient); ok {
+			return headerClient.MakeRequestWithHeaders(targetURL, headers)
+		}
+		logger.Debugf("HTTP客户端不支持自定义头部，使用默认请求: %s", targetURL)
+	}
+
+	if client, ok := httpClient.(interface {
+		MakeRequest(string) (string, int, error)
+	}); ok {
+		return client.MakeRequest(targetURL)
+	}
+
+	return "", 0, fmt.Errorf("HTTP客户端不支持MakeRequest方法")
+}
+
+func buildProbeURLFromParts(scheme, host, path string) string {
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	trimmed := path
+	if trimmed == "" {
+		trimmed = "/"
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, host, trimmed)
+}
+
 // HasPathRules 检查是否有包含path字段的规则
 func (e *Engine) HasPathRules() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	for _, rule := range e.rules {
-		if rule.Path != "" {
+		if rule != nil && rule.HasPaths() {
 			return true
 		}
 	}
@@ -1149,9 +1219,10 @@ func (e *Engine) GetPathRulesCount() int {
 
 	count := 0
 	for _, rule := range e.rules {
-		if rule.Path != "" {
-			count++
+		if rule == nil {
+			continue
 		}
+		count += len(rule.Paths)
 	}
 	return count
 }
@@ -1163,7 +1234,7 @@ func (e *Engine) GetPathRules() []*FingerprintRule {
 
 	var pathRules []*FingerprintRule
 	for _, rule := range e.rules {
-		if rule.Path != "" {
+		if rule != nil && rule.HasPaths() {
 			pathRules = append(pathRules, rule)
 		}
 	}

@@ -4,20 +4,27 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
+	portconfig "veo/internal/core/ports"
 	internaldirscan "veo/internal/modules/dirscan"
 	fingerprintinternal "veo/internal/modules/fingerprint"
+	portscanpkg "veo/internal/modules/portscan"
+	masscanrunner "veo/internal/modules/portscan/masscan"
+	portscanservice "veo/internal/modules/portscan/service"
 	"veo/internal/utils/filter"
 	requests "veo/internal/utils/processor"
 )
@@ -26,11 +33,13 @@ import (
 type Config struct {
 	DirTargets         []string
 	FingerprintTargets []string
+	PortTargets        []string
 	SkipTLSVerify      bool
 	AutoSkipTLSForIP   *bool
 	HTTPTimeout        time.Duration
 	Dirscan            *DirscanConfig
 	Fingerprint        *FingerprintConfig
+	Portscan           *PortscanConfig
 }
 
 // DirscanConfig 描述目录扫描的可调参数。
@@ -68,6 +77,15 @@ type FingerprintConfig struct {
 	ShowSnippet     *bool
 }
 
+// PortscanConfig 描述端口扫描可调参数。
+type PortscanConfig struct {
+	Ports              string
+	Rate               int
+	TargetFile         string
+	ResolveToIP        bool
+	EnableServiceProbe bool
+}
+
 // FingerprintFilterOptions 控制指纹识别的过滤行为。
 type FingerprintFilterOptions struct {
 	ContentTypes               []string
@@ -103,6 +121,11 @@ func DefaultFingerprintConfig() *FingerprintConfig {
 	return cloneFingerprintConfig(defaultFingerprintConfig())
 }
 
+// DefaultPortscanConfig 返回端口扫描默认配置。
+func DefaultPortscanConfig() *PortscanConfig {
+	return clonePortscanConfig(defaultPortscanConfig())
+}
+
 func defaultDirscanConfig() *DirscanConfig {
 	return &DirscanConfig{
 		MaxConcurrency:   20,
@@ -124,11 +147,19 @@ func defaultFingerprintConfig() *FingerprintConfig {
 	}
 }
 
+func defaultPortscanConfig() *PortscanConfig {
+	return &PortscanConfig{
+		ResolveToIP:        true,
+		EnableServiceProbe: true,
+	}
+}
+
 // Result 表示整合后的扫描结果。
 type Result struct {
 	Summary            Summary      `json:"summary"`
 	DirscanResults     []PageResult `json:"dirscan_results,omitempty"`
 	FingerprintTargets []PageResult `json:"fingerprint_targets,omitempty"`
+	PortscanResults    []PortResult `json:"portscan_results,omitempty"`
 }
 
 // Summary 扫描统计信息。
@@ -136,10 +167,12 @@ type Summary struct {
 	Total                   int   `json:"total"`
 	DirscanCount            int   `json:"dirscan_count"`
 	FingerprintCount        int   `json:"fingerprint_count"`
+	PortscanCount           int   `json:"portscan_count"`
 	DurationMs              int64 `json:"duration_ms"`
 	FingerprintRules        int   `json:"fingerprint_rules"`
 	DirTargetsCount         int   `json:"dir_targets_count"`
 	FingerprintTargetsCount int   `json:"fingerprint_targets_count"`
+	PortTargetsCount        int   `json:"port_targets_count"`
 }
 
 // PageResult 描述单个页面的扫描信息。
@@ -151,6 +184,13 @@ type PageResult struct {
 	DurationMs    int64                    `json:"duration_ms"`
 	ContentType   string                   `json:"content_type,omitempty"`
 	Fingerprints  []FingerprintMatchOutput `json:"fingerprints,omitempty"`
+}
+
+// PortResult 描述端口扫描结果
+type PortResult struct {
+	IP      string `json:"ip"`
+	Port    int    `json:"port"`
+	Service string `json:"service,omitempty"`
 }
 
 // FingerprintMatchOutput 表示指纹识别的匹配结果。
@@ -168,8 +208,8 @@ func Run(cfg *Config) (*Result, error) {
 		return nil, err
 	}
 
-	if len(normalized.DirTargets) == 0 && len(normalized.FingerprintTargets) == 0 {
-		return nil, errors.New("至少需要配置一个目录扫描或指纹识别目标")
+	if len(normalized.DirTargets) == 0 && len(normalized.FingerprintTargets) == 0 && len(normalized.PortTargets) == 0 && strings.TrimSpace(safeTargetFile(normalized.Portscan)) == "" {
+		return nil, errors.New("至少需要配置一个目录扫描、指纹识别或端口扫描目标")
 	}
 
 	fpEngine, err := createFingerprintEngine(normalized.Fingerprint)
@@ -188,7 +228,7 @@ func Run(cfg *Config) (*Result, error) {
 
 	var fpOutputs []PageResult
 	if len(normalized.FingerprintTargets) > 0 {
-		processor := requests.NewRequestProcessor(nil)
+		processor := buildGlobalRequestProcessor(normalized)
 		responses := processor.ProcessURLs(normalized.FingerprintTargets)
 		if len(responses) == 0 {
 			return nil, errors.New("fingerprint targets processed but no responses returned")
@@ -211,6 +251,18 @@ func Run(cfg *Config) (*Result, error) {
 		}
 	}
 
+	var portOutputs []PortResult
+	if normalized.Portscan != nil {
+		portResults, err := runPortscan(normalized.Portscan, normalized.PortTargets)
+		if err != nil {
+			return nil, fmt.Errorf("端口扫描失败: %w", err)
+		}
+		portOutputs = make([]PortResult, 0, len(portResults))
+		for _, r := range portResults {
+			portOutputs = append(portOutputs, PortResult{IP: r.IP, Port: r.Port, Service: strings.TrimSpace(r.Service)})
+		}
+	}
+
 	stats := fpEngine.GetStats()
 	rulesLoaded := 0
 	if stats != nil {
@@ -221,16 +273,19 @@ func Run(cfg *Config) (*Result, error) {
 
 	return &Result{
 		Summary: Summary{
-			Total:                   len(dirOutputs) + len(fpOutputs),
+			Total:                   len(dirOutputs) + len(fpOutputs) + len(portOutputs),
 			DirscanCount:            len(dirOutputs),
 			FingerprintCount:        len(fpOutputs),
+			PortscanCount:           len(portOutputs),
 			DurationMs:              duration,
 			FingerprintRules:        rulesLoaded,
 			DirTargetsCount:         len(normalized.DirTargets),
 			FingerprintTargetsCount: len(normalized.FingerprintTargets),
+			PortTargetsCount:        len(normalized.PortTargets),
 		},
 		DirscanResults:     dirOutputs,
 		FingerprintTargets: fpOutputs,
+		PortscanResults:    portOutputs,
 	}, nil
 }
 
@@ -266,6 +321,7 @@ func normalizeConfig(cfg *Config) (*Config, error) {
 	normalized := &Config{
 		DirTargets:         sanitizeTargets(cfg.DirTargets),
 		FingerprintTargets: sanitizeTargets(cfg.FingerprintTargets),
+		PortTargets:        sanitizeTargets(cfg.PortTargets),
 		SkipTLSVerify:      cfg.SkipTLSVerify,
 		HTTPTimeout:        cfg.HTTPTimeout,
 	}
@@ -282,6 +338,15 @@ func normalizeConfig(cfg *Config) (*Config, error) {
 
 	normalized.Dirscan = cloneDirscanConfig(cfg.Dirscan)
 	normalized.Fingerprint = cloneFingerprintConfig(cfg.Fingerprint)
+	if cfg.Portscan != nil {
+		normalized.Portscan = clonePortscanConfig(cfg.Portscan)
+	} else if len(normalized.PortTargets) > 0 {
+		normalized.Portscan = clonePortscanConfig(defaultPortscanConfig())
+	}
+	if normalized.Portscan != nil {
+		normalized.Portscan.TargetFile = strings.TrimSpace(normalized.Portscan.TargetFile)
+		normalized.Portscan.Ports = strings.TrimSpace(normalized.Portscan.Ports)
+	}
 
 	if autoSkip && !normalized.SkipTLSVerify && (anyURLHasIPHost(normalized.DirTargets) || anyURLHasIPHost(normalized.FingerprintTargets)) {
 		normalized.SkipTLSVerify = true
@@ -578,6 +643,94 @@ func runDirscan(cfg *DirscanConfig, targets []string) (*internaldirscan.ScanResu
 	return engine.PerformScan(collector)
 }
 
+func buildGlobalRequestProcessor(cfg *Config) *requests.RequestProcessor {
+	timeout := 10 * time.Second
+	if cfg != nil && cfg.HTTPTimeout > 0 {
+		timeout = cfg.HTTPTimeout
+	}
+
+	threads := 200
+	if cfg != nil && cfg.Fingerprint != nil && cfg.Fingerprint.MaxConcurrency > 0 {
+		threads = cfg.Fingerprint.MaxConcurrency
+	}
+
+	reqCfg := &requests.RequestConfig{
+		Timeout:         timeout,
+		MaxRetries:      2,
+		MaxConcurrent:   threads,
+		FollowRedirect:  true,
+		RandomUserAgent: true,
+	}
+	processor := requests.NewRequestProcessor(reqCfg)
+	processor.SetCustomHeaders(config.GetCustomHeaders())
+	return processor
+}
+
+func runPortscan(cfg *PortscanConfig, targets []string) ([]portscanpkg.OpenPortResult, error) {
+	if cfg == nil {
+		return nil, errors.New("portscan config is required")
+	}
+
+	opts := portscanpkg.Options{
+		Rate:       cfg.Rate,
+		TargetFile: strings.TrimSpace(cfg.TargetFile),
+	}
+
+	if trimmed := strings.TrimSpace(cfg.Ports); trimmed != "" {
+		resolved, _, err := portconfig.ResolveExpression(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		opts.Ports = resolved
+	}
+
+	var resolvedTargets []string
+	if len(targets) > 0 {
+		if cfg.ResolveToIP {
+			dedupTargets := sanitizeTargets(targets)
+			ips, err := masscanrunner.ResolveTargetsToIPs(dedupTargets)
+			if err != nil {
+				return nil, err
+			}
+			resolvedTargets = ips
+		} else {
+			resolvedTargets = sanitizeTargets(targets)
+		}
+	}
+
+	if len(resolvedTargets) == 0 && strings.TrimSpace(opts.TargetFile) == "" {
+		return nil, errors.New("未指定端口扫描目标")
+	}
+
+	if opts.Ports == "" {
+		opts.Ports = masscanrunner.DerivePortsFromTargets(targets)
+		if opts.Ports == "" {
+			opts.Ports = masscanrunner.DerivePortsFromTargets(resolvedTargets)
+		}
+	}
+
+	if strings.TrimSpace(opts.Ports) == "" {
+		return nil, errors.New("未指定端口表达式")
+	}
+
+	opts.Targets = resolvedTargets
+
+	results, err := masscanrunner.Run(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	results = deduplicatePortResults(results)
+
+	if cfg.EnableServiceProbe && len(results) > 0 {
+		serviceOpts := portscanservice.Options{}
+		results = portscanservice.Identify(context.Background(), results, serviceOpts)
+		results = deduplicatePortResults(results)
+	}
+
+	return results, nil
+}
+
 func createFingerprintEngine(cfg *FingerprintConfig) (*fingerprintinternal.Engine, error) {
 	config := cloneFingerprintConfig(cfg)
 	if config.LogLevel != "" {
@@ -750,6 +903,18 @@ func cloneFingerprintConfig(cfg *FingerprintConfig) *FingerprintConfig {
 	return &copyCfg
 }
 
+func clonePortscanConfig(cfg *PortscanConfig) *PortscanConfig {
+	var source *PortscanConfig
+	if cfg != nil {
+		source = cfg
+	} else {
+		source = defaultPortscanConfig()
+	}
+
+	copyCfg := *source
+	return &copyCfg
+}
+
 func cloneIntSlice(src []int) []int {
 	if src == nil {
 		return nil
@@ -794,4 +959,47 @@ func cloneBoolPtr(src *bool) *bool {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func deduplicatePortResults(results []portscanpkg.OpenPortResult) []portscanpkg.OpenPortResult {
+	if len(results) <= 1 {
+		return results
+	}
+
+	seen := make(map[string]portscanpkg.OpenPortResult, len(results))
+	for _, r := range results {
+		ip := strings.TrimSpace(r.IP)
+		if ip == "" || r.Port <= 0 {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", ip, r.Port)
+		if existing, ok := seen[key]; ok {
+			if strings.TrimSpace(existing.Service) == "" && strings.TrimSpace(r.Service) != "" {
+				seen[key] = r
+			}
+			continue
+		}
+		seen[key] = portscanpkg.OpenPortResult{IP: ip, Port: r.Port, Service: strings.TrimSpace(r.Service)}
+	}
+
+	deduped := make([]portscanpkg.OpenPortResult, 0, len(seen))
+	for _, r := range seen {
+		deduped = append(deduped, r)
+	}
+
+	sort.Slice(deduped, func(i, j int) bool {
+		if deduped[i].IP == deduped[j].IP {
+			return deduped[i].Port < deduped[j].Port
+		}
+		return deduped[i].IP < deduped[j].IP
+	})
+
+	return deduped
+}
+
+func safeTargetFile(cfg *PortscanConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.TargetFile)
 }

@@ -2011,6 +2011,7 @@
 /test.aspx
 /test.asp
 /test.jsp
+/routes
 /actuator/gateway/routes
 /gateway/routes
 /run.php
