@@ -108,6 +108,7 @@ type ResponseFilter struct {
 	// [新增] 可选的指纹识别引擎（用于目录扫描结果的二次识别）
 	fingerprintEngine      interface{}
 	showFingerprintSnippet bool
+	showFingerprintRule    bool
 }
 
 // NewResponseFilter 创建新的响应过滤器
@@ -153,6 +154,12 @@ func (rf *ResponseFilter) EnableFingerprintSnippet(enabled bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.showFingerprintSnippet = enabled
+}
+
+func (rf *ResponseFilter) EnableFingerprintRuleDisplay(enabled bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.showFingerprintRule = enabled
 }
 
 // FilterResponses 过滤响应列表
@@ -646,7 +653,7 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 
 	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, matchesValue.Len())
 
-	convertedMatches := rf.convertMatchesToInterfaces(matchesValue, rf.showFingerprintSnippet)
+	convertedMatches := rf.convertMatchesToInterfaces(matchesValue, rf.showFingerprintRule, rf.showFingerprintSnippet)
 
 	// 格式化指纹信息
 	return convertedMatches, rf.formatFingerprintMatches(matchesInterface)
@@ -747,11 +754,12 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 	return newResp.Interface()
 }
 
-func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value, includeSnippet bool) []interfaces.FingerprintMatch {
+func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value, includeRule, includeSnippet bool) []interfaces.FingerprintMatch {
 	count := matchesValue.Len()
 	if count == 0 {
 		return nil
 	}
+	_ = includeRule
 
 	results := make([]interfaces.FingerprintMatch, 0, count)
 	for i := 0; i < count; i++ {
@@ -845,10 +853,9 @@ func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{})
 		ruleName := ruleNameField.String()
 		dslMatched := dslMatchedField.String()
 
-		if ruleName != "" && dslMatched != "" {
-			parts = append(parts, fmt.Sprintf("<%s> <%s>",
-				formatter.FormatFingerprintName(ruleName),
-				formatter.FormatDSL(dslMatched)))
+		display := formatter.FormatFingerprintDisplay(ruleName, dslMatched, rf.showFingerprintRule)
+		if display != "" {
+			parts = append(parts, display)
 			logger.Debugf("匹配: %s - %s", ruleName, dslMatched)
 		}
 	}

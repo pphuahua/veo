@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -10,8 +11,6 @@ import (
 
 	"veo/internal/core/config"
 	"veo/internal/core/logger"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // extractHost 从主机字符串中提取主机名（去除端口）
@@ -222,16 +221,13 @@ func (e *entry) shutdown(ctx context.Context) error {
 func (e *entry) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	proxy := e.proxy
 
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.entry.ServeHTTP",
-		"host": req.Host,
-	})
+	prefix := fmt.Sprintf("[Proxy.entry.ServeHTTP host=%s]", req.Host)
 
 	// 检查主机是否被允许（对于有效的代理请求）
 	if req.URL.IsAbs() && req.URL.Host != "" {
 		host := extractHost(req.URL.Host) // 🔧 提取主机名（去除端口）
 		if !config.IsHostAllowed(host) {
-			log.Debugf("主机被拒绝，拒绝代理: %s (原始: %s)", host, req.URL.Host)
+			logger.Debugf("%s 主机被拒绝，拒绝代理: %s (原始: %s)", prefix, host, req.URL.Host)
 			httpError(res, "Host not allowed", http.StatusForbidden)
 			return
 		}
@@ -241,7 +237,7 @@ func (e *entry) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	if e.proxy.authProxy != nil {
 		b, err := e.proxy.authProxy(res, req)
 		if !b {
-			log.Errorf("代理认证失败: %s", err.Error())
+			logger.Errorf("%s 代理认证失败: %s", prefix, err.Error())
 			httpError(res, "", http.StatusProxyAuthRequired)
 			return
 		}
@@ -274,15 +270,12 @@ func (e *entry) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 func (e *entry) handleConnect(res http.ResponseWriter, req *http.Request) {
 	proxy := e.proxy
 
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.entry.handleConnect",
-		"host": req.Host,
-	})
+	prefix := fmt.Sprintf("[Proxy.entry.handleConnect host=%s]", req.Host)
 
 	// 检查主机是否被允许
 	host := extractHost(req.Host) // 🔧 提取主机名（去除端口）
 	if !config.IsHostAllowed(host) {
-		log.Debugf("主机被拒绝，拒绝CONNECT: %s (原始: %s)", host, req.Host)
+		logger.Debugf("%s 主机被拒绝，拒绝CONNECT: %s (原始: %s)", prefix, host, req.Host)
 		httpError(res, "Host not allowed", http.StatusForbidden)
 		return
 	}
@@ -341,10 +334,7 @@ func (e *entry) establishConnection(res http.ResponseWriter, f *Flow) (net.Conn,
 
 func (e *entry) directTransfer(res http.ResponseWriter, req *http.Request, f *Flow) {
 	proxy := e.proxy
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.entry.directTransfer",
-		"host": req.Host,
-	})
+	prefix := fmt.Sprintf("[Proxy.entry.directTransfer host=%s]", req.Host)
 
 	conn, err := proxy.getUpstreamConn(req.Context(), req)
 	if err != nil {
@@ -361,15 +351,12 @@ func (e *entry) directTransfer(res http.ResponseWriter, req *http.Request, f *Fl
 	}
 	defer cconn.Close()
 
-	transfer(log, conn, cconn)
+	transfer(prefix, conn, cconn)
 }
 
 func (e *entry) httpsDialFirstAttack(res http.ResponseWriter, req *http.Request, f *Flow) {
 	proxy := e.proxy
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.entry.httpsDialFirstAttack",
-		"host": req.Host,
-	})
+	prefix := fmt.Sprintf("[Proxy.entry.httpsDialFirstAttack host=%s]", req.Host)
 
 	conn, err := proxy.attacker.httpsDial(req.Context(), req)
 	if err != nil {
@@ -394,7 +381,7 @@ func (e *entry) httpsDialFirstAttack(res http.ResponseWriter, req *http.Request,
 	}
 	if !IsTls(peek) {
 		// todo: http, ws
-		transfer(log, conn, cconn)
+		transfer(prefix, conn, cconn)
 		cconn.Close()
 		conn.Close()
 		return
@@ -407,10 +394,7 @@ func (e *entry) httpsDialFirstAttack(res http.ResponseWriter, req *http.Request,
 
 func (e *entry) httpsDialLazyAttack(res http.ResponseWriter, req *http.Request, f *Flow) {
 	proxy := e.proxy
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.entry.httpsDialLazyAttack",
-		"host": req.Host,
-	})
+	prefix := fmt.Sprintf("[Proxy.entry.httpsDialLazyAttack host=%s]", req.Host)
 
 	cconn, err := e.establishConnection(res, f)
 	if err != nil {
@@ -433,7 +417,7 @@ func (e *entry) httpsDialLazyAttack(res http.ResponseWriter, req *http.Request, 
 			// log.Error(err)
 			return
 		}
-		transfer(log, conn, cconn)
+		transfer(prefix, conn, cconn)
 		conn.Close()
 		cconn.Close()
 		return

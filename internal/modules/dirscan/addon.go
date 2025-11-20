@@ -1,15 +1,10 @@
 package dirscan
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"veo/internal/core/console"
-	"veo/internal/utils/collector"
-	"veo/internal/utils/generator"
-	"veo/proxy"
 
 	"veo/internal/core/logger"
+	"veo/internal/utils/collector"
 )
 
 // ===========================================
@@ -18,28 +13,23 @@ import (
 
 // DirscanAddon 目录扫描插件
 type DirscanAddon struct {
-	proxy.BaseAddon
-	engine         *Engine
-	collector      *collector.Collector
-	consoleManager *console.ConsoleManager
-	enabled        bool
-	status         ScanStatus
+	engine    *Engine
+	collector *collector.Collector
+	enabled   bool
+	status    ScanStatus
 }
 
 // NewDirscanAddon 创建目录扫描插件
 func NewDirscanAddon(config *EngineConfig) (*DirscanAddon, error) {
 	// 创建引擎
 	engine := NewEngine(config)
-
-	// 创建collector
 	collectorInstance := collector.NewCollector()
 
 	addon := &DirscanAddon{
-		engine:         engine,
-		collector:      collectorInstance,
-		consoleManager: nil, // 需要后续设置
-		enabled:        true,
-		status:         StatusIdle,
+		engine:    engine,
+		collector: collectorInstance,
+		enabled:   true,
+		status:    StatusIdle,
 	}
 
 	logger.Debug("目录扫描插件初始化完成")
@@ -64,9 +54,6 @@ func (da *DirscanAddon) Enable() {
 		da.collector.EnableCollection()
 	}
 	logger.Debugf("目录扫描插件已启用")
-
-	// 预加载字典文件，提升用户体验
-	da.preloadDictionaries()
 }
 
 // Disable 禁用插件
@@ -153,16 +140,7 @@ func (da *DirscanAddon) GetStatus() ScanStatus {
 // 配置和依赖注入方法
 // ===========================================
 
-// SetConsoleManager 设置控制台管理器
-func (da *DirscanAddon) SetConsoleManager(consoleManager *console.ConsoleManager) {
-	da.consoleManager = consoleManager
-	logger.Debug("控制台管理器已设置")
-}
-
-// GetConsoleManager 获取控制台管理器
-func (da *DirscanAddon) GetConsoleManager() *console.ConsoleManager {
-	return da.consoleManager
-}
+// 控制台设置接口已移除，保持简洁依赖
 
 // GetCollector 获取collector（用于依赖注入）
 func (da *DirscanAddon) GetCollector() *collector.Collector {
@@ -193,115 +171,14 @@ func (da *DirscanAddon) SetCollector(c *collector.Collector) {
 // 字典预加载方法
 // ===========================================
 
-// preloadDictionaries 预加载字典文件
-func (da *DirscanAddon) preloadDictionaries() {
-	// 异步预加载字典，避免阻塞插件启用
-	go func() {
-		// 创建内容管理器来预加载字典
-		contentManager := generator.NewContentManager()
-		urlGenerator := contentManager.GetURLGenerator()
-
-		// 触发字典加载（通过调用一个空的URL生成来触发字典加载）
-		urlGenerator.GenerateURLs([]string{})
-
-		logger.Debug("字典预加载完成")
-	}()
-}
+// 字典预加载逻辑已经迁移到生成器内部（无须处理）
 
 // ===========================================
 // 用户交互方法
 // ===========================================
 
 // StartInputListener 启动输入监听器
-func (da *DirscanAddon) StartInputListener() {
-	if !da.enabled {
-		logger.Warn("插件未启用，无法启动输入监听器")
-		return
-	}
-
-	// 设置控制台模式
-	if da.consoleManager != nil {
-		da.consoleManager.SetCurrentMode(console.ModeDirectoryScan)
-	}
-
-	go da.runInputListener()
-	// 启动URL状态监控器
-	logger.Debugf("输入监听器已启动")
-}
-
-// runInputListener 运行输入监听器
-func (da *DirscanAddon) runInputListener() {
-	scanner := bufio.NewScanner(os.Stdin)
-
-	for {
-		if !da.enabled {
-			break
-		}
-
-		logger.Debug("按回车开始目录扫描...")
-		if !scanner.Scan() {
-			break
-		}
-
-		// 触发扫描
-		da.handleScanTrigger()
-	}
-}
-
-// handleScanTrigger 处理扫描触发
-func (da *DirscanAddon) handleScanTrigger() {
-	result, err := da.TriggerScan()
-	if err != nil {
-		logger.Errorf("扫描失败: %v", err)
-		return
-	}
-
-	if result != nil {
-		logger.Infof("Scanning Done，Times: %v，Result: %d",
-			result.Duration, len(result.FilterResult.ValidPages))
-		if result.ReportPath != "" {
-			logger.Infof("Scan Report Output: %s", result.ReportPath)
-		}
-	}
-
-	// 扫描完成后的用户交互
-	da.showScanCompleteMessage(result)
-}
-
-// showScanCompleteMessage 显示扫描完成消息
-func (da *DirscanAddon) showScanCompleteMessage(result *ScanResult) {
-	// 暂停collector，等待用户输入
-	if da.collector != nil {
-		da.collector.PauseCollection()
-	}
-	if da.consoleManager != nil {
-		da.consoleManager.PauseFingerprintRecognition()
-	}
-
-	// 等待用户按回车键
-	da.waitForUserInput()
-
-	// 用户确认后，恢复完整的收集状态
-	if da.collector != nil {
-		da.collector.ClearURLMap()      // 清空collector状态
-		da.collector.ResumeCollection() // 恢复暂停状态
-		da.collector.EnableCollection() // 重新启用收集功能
-	}
-	if da.consoleManager != nil {
-		da.consoleManager.ResumeFingerprintRecognition()
-	}
-
-	// 清空引擎结果
-	da.engine.ClearResults()
-}
-
-// waitForUserInput 等待用户输入
-func (da *DirscanAddon) waitForUserInput() {
-	fmt.Println("<Press \"Enter\" to Start URL Collector>")
-
-	var input string
-	fmt.Scanln(&input) // 等待用户按回车
-}
+// 输入监听等交互逻辑已废弃（统一由 CLI 控制）
 
 // ===========================================
 // Proxy.Addon接口实现

@@ -24,7 +24,7 @@ import (
 	fingerprintinternal "veo/internal/modules/fingerprint"
 	portscanpkg "veo/internal/modules/portscan"
 	masscanrunner "veo/internal/modules/portscan/masscan"
-	portscanservice "veo/internal/modules/portscan/service"
+	portservice "veo/internal/modules/portscan/service/fingerprint"
 	"veo/internal/utils/filter"
 	requests "veo/internal/utils/processor"
 )
@@ -75,6 +75,7 @@ type FingerprintConfig struct {
 	LogLevel        string
 	Filters         *FingerprintFilterOptions
 	ShowSnippet     *bool
+	ShowRule        *bool
 }
 
 // PortscanConfig 描述端口扫描可调参数。
@@ -143,7 +144,8 @@ func defaultFingerprintConfig() *FingerprintConfig {
 		EnableFiltering: true,
 		MaxBodySize:     1 * 1024 * 1024,
 		LogMatches:      true,
-		ShowSnippet:     boolPtr(true),
+		ShowSnippet:     boolPtr(false),
+		ShowRule:        boolPtr(false),
 	}
 }
 
@@ -723,8 +725,8 @@ func runPortscan(cfg *PortscanConfig, targets []string) ([]portscanpkg.OpenPortR
 	results = deduplicatePortResults(results)
 
 	if cfg.EnableServiceProbe && len(results) > 0 {
-		serviceOpts := portscanservice.Options{}
-		results = portscanservice.Identify(context.Background(), results, serviceOpts)
+		serviceOpts := portservice.Options{}
+		results = portservice.IdentifyServices(context.Background(), results, serviceOpts)
 		results = deduplicatePortResults(results)
 	}
 
@@ -754,11 +756,17 @@ func createFingerprintEngine(cfg *FingerprintConfig) (*fingerprintinternal.Engin
 
 	applyFingerprintFilters(engine, config.Filters)
 
-	snippetEnabled := true
+	snippetEnabled := false
 	if config.ShowSnippet != nil {
 		snippetEnabled = *config.ShowSnippet
 	}
 	engine.EnableSnippet(snippetEnabled)
+
+	ruleEnabled := false
+	if config.ShowRule != nil {
+		ruleEnabled = *config.ShowRule
+	}
+	engine.EnableRuleLogging(ruleEnabled)
 	return engine, nil
 }
 
@@ -891,6 +899,7 @@ func cloneFingerprintConfig(cfg *FingerprintConfig) *FingerprintConfig {
 
 	copyCfg := *source
 	copyCfg.ShowSnippet = cloneBoolPtr(source.ShowSnippet)
+	copyCfg.ShowRule = cloneBoolPtr(source.ShowRule)
 	if source.Filters != nil {
 		filterCopy := *source.Filters
 		filterCopy.ContentTypes = cloneStringSlice(source.Filters.ContentTypes)

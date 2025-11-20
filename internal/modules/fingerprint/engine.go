@@ -91,6 +91,13 @@ func (e *Engine) EnableSnippet(enabled bool) {
 	e.mu.Unlock()
 }
 
+// EnableRuleLogging 控制是否输出匹配规则内容
+func (e *Engine) EnableRuleLogging(enabled bool) {
+	e.mu.Lock()
+	e.showRules = enabled
+	e.mu.Unlock()
+}
+
 // IsSnippetEnabled 返回是否启用指纹匹配片段输出
 func (e *Engine) IsSnippetEnabled() bool {
 	e.mu.RLock()
@@ -523,7 +530,10 @@ func (e *Engine) matchRule(rule *FingerprintRule, ctx *DSLContext) *FingerprintM
 }
 
 func (e *Engine) shouldCaptureSnippet(rule *FingerprintRule) bool {
-	return true
+	if rule == nil {
+		return false
+	}
+	return e.IsSnippetEnabled()
 }
 
 func (e *Engine) extractSnippetForDSL(dsl string, ctx *DSLContext) string {
@@ -758,6 +768,39 @@ func (e *Engine) checkAndMarkFingerprint(cacheKey string) bool {
 	return true // 应该输出
 }
 
+func (e *Engine) formatFingerprintDisplay(name, rule string) string {
+	e.mu.RLock()
+	showRule := e.showRules
+	e.mu.RUnlock()
+	return formatter.FormatFingerprintDisplay(name, rule, showRule)
+}
+
+func highlightedSnippetLines(snippet, matcher string) []string {
+	if snippet == "" {
+		return nil
+	}
+	snippet = strings.ReplaceAll(snippet, "\r\n", "\n")
+	snippet = strings.ReplaceAll(snippet, "\r", "\n")
+	rawLines := strings.Split(snippet, "\n")
+	var lines []string
+	for _, line := range rawLines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		highlighted := formatter.HighlightSnippet(line, matcher)
+		if highlighted != "" {
+			lines = append(lines, highlighted)
+		}
+	}
+	if len(lines) == 0 {
+		if highlighted := formatter.HighlightSnippet(strings.TrimSpace(snippet), matcher); highlighted != "" {
+			lines = append(lines, highlighted)
+		}
+	}
+	return lines
+}
+
 // ===========================================
 // 图标缓存相关方法
 // ===========================================
@@ -865,12 +908,12 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 			if match == nil {
 				continue
 			}
-			pair := formatter.FormatFingerprintPair(match.RuleName, match.DSLMatched)
-			if pair == "" {
+			display := e.formatFingerprintDisplay(match.RuleName, match.DSLMatched)
+			if display == "" {
 				continue
 			}
 			logMsg.WriteString(" ")
-			logMsg.WriteString(pair)
+			logMsg.WriteString(display)
 		}
 
 		// 添加标签（如果提供）
@@ -886,15 +929,9 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 				if match == nil {
 					continue
 				}
-				snippet := strings.TrimSpace(match.Snippet)
-				if snippet == "" {
-					continue
+				for _, line := range highlightedSnippetLines(match.Snippet, match.DSLMatched) {
+					snippetLines = append(snippetLines, line)
 				}
-				highlighted := formatter.HighlightSnippet(snippet, match.DSLMatched)
-				if highlighted == "" {
-					continue
-				}
-				snippetLines = append(snippetLines, highlighted)
 			}
 			if len(snippetLines) > 0 {
 				logMsg.WriteString("\n")

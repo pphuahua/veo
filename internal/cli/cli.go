@@ -23,7 +23,7 @@ import (
 	portconfig "veo/internal/core/ports"
 	"veo/internal/modules/authlearning"
 	"veo/internal/modules/dirscan"
-	"veo/internal/modules/fingerprint"
+	fpaddon "veo/internal/modules/fingerprint"
 	"veo/internal/utils/collector"
 	"veo/internal/utils/dictionary"
 	"veo/internal/utils/filter"
@@ -34,7 +34,7 @@ import (
 	// "os/exec" // removed: masscan执行迁移至模块
 	portscanpkg "veo/internal/modules/portscan"
 	masscanrunner "veo/internal/modules/portscan/masscan"
-	portscanservice "veo/internal/modules/portscan/service"
+	portservice "veo/internal/modules/portscan/service/fingerprint"
 	report "veo/internal/modules/reporter"
 	// neturl "net/url" // not used after logic change
 )
@@ -54,7 +54,7 @@ func (af *arrayFlags) Set(value string) error {
 // CLIArgs CLI参数结构体
 type CLIArgs struct {
 	Targets    []string // 目标主机/URL (-u)
-	TargetFile string   // 新增：目标文件路径 (-f)
+	TargetFile string   // 新增：目标文件路径 (-l)
 	Modules    []string // 启用的模块 (-m)
 	Port       int      // 监听端口 (-lp)
 	// 端口扫描（masscan）相关
@@ -80,6 +80,7 @@ type CLIArgs struct {
 	JSONOutput bool // 控制台输出JSON结果 (--json)
 
 	// 指纹细节输出开关
+	Verbose            bool // 指纹匹配规则展示开关 (-v)
 	VeryVerbose        bool // 指纹匹配内容展示开关 (-vv)
 	NoAliveCheck       bool // 跳过存活检测 (-na)
 	EnableServiceProbe bool // 启用端口服务识别 (默认开启，-sV 关闭)
@@ -109,7 +110,7 @@ type CLIApp struct {
 	collector         *collector.Collector
 	consoleManager    *console.ConsoleManager
 	dirscanModule     *dirscan.DirscanModule
-	fingerprintAddon  *fingerprint.FingerprintAddon
+	fingerprintAddon  *fpaddon.FingerprintAddon
 	authLearningAddon *authlearning.AuthLearningAddon
 	proxyStarted      bool
 	args              *CLIArgs
@@ -204,7 +205,7 @@ func Execute() {
 func ParseCLIArgs() *CLIArgs {
 	var (
 		targetsStr = flag.String("u", "", "目标主机/URL，多个目标用逗号分隔 (例如: -u www.baidu.com,api.baidu.com)")
-		targetFile = flag.String("f", "", "目标文件路径，每行一个目标 (例如: -f targets.txt)")
+		targetFile = flag.String("l", "", "目标文件路径，每行一个目标 (例如: -l targets.txt)")
 		modulesStr = flag.String("m", "", "启用的模块，多个模块用逗号分隔 (例如: -m finger,dirscan)")
 		localPort  = flag.Int("lp", 9080, "本地代理监听端口，仅在被动模式下使用 (默认: 9080)")
 		portsArg   = flag.String("p", "", "端口范围或字典名称，如 80,443,8000-8100 / web / service / top1000 / all")
@@ -225,7 +226,8 @@ func ParseCLIArgs() *CLIArgs {
 
 		// 新增：实时统计显示参数
 		stats        = flag.Bool("stats", false, "启用实时扫描进度统计显示")
-		veryVerbose  = flag.Bool("vv", false, "控制指纹匹配内容展示开关 (默认关闭，可使用 --vv 开启)")
+		verbose      = flag.Bool("v", false, "显示指纹匹配规则内容 (默认关闭，可使用 -v 开启)")
+		veryVerbose  = flag.Bool("vv", false, "显示指纹匹配规则与内容片段 (默认关闭，可使用 -vv 开启)")
 		noColor      = flag.Bool("nc", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
 		jsonOutput   = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
 		noAlive      = flag.Bool("na", false, "跳过扫描前的存活检测 (默认进行存活检测)")
@@ -275,6 +277,7 @@ func ParseCLIArgs() *CLIArgs {
 		Timeout:            *timeout,
 		Output:             getStringValue(*output, *outputLong),
 		Stats:              *stats,
+		Verbose:            *verbose,
 		VeryVerbose:        *veryVerbose,
 		NoColor:            *noColor,
 		JSONOutput:         *jsonOutput,
@@ -355,12 +358,12 @@ veo - 端口扫描/指纹识别/目录扫描
 
 用法:
   %[1]s -u <targets> [options]           # 主动扫描（默认）
-  %[1]s -f <file> [options]              # 文件批量扫描
+  %[1]s -l <file> [options]              # 文件批量扫描
   %[1]s -u <targets> --listen [options]  # 被动代理模式
 
 目标与模块:
   -u string            目标列表，逗号分隔；支持 URL / 域名 / host:port / CIDR / IP 范围
-  -f string            目标文件，每行一个目标；支持空行和 # 注释
+  -l string            目标文件，每行一个目标；支持空行和 # 注释
   -m string            启用模块，默认 finger,dirscan。可选 finger / dirscan / port
   --listen             被动代理模式；配合 -lp 指定监听端口（默认 9080）
 
@@ -373,8 +376,9 @@ veo - 端口扫描/指纹识别/目录扫描
 扫描控制:
   --debug              输出调试日志
   --stats              显示实时统计信息
+  -v                   显示指纹匹配规则内容
   -na                  跳过存活检测
-  -vv                  指纹识别输出匹配片段
+  -vv                  显示指纹匹配规则及匹配片段
   -nc                  禁用彩色输出
   --json               控制台输出 JSON
   -ua bool             是否启用随机User-Agent 池 (默认 true，使用 -ua=false 关闭)
@@ -399,7 +403,7 @@ veo - 端口扫描/指纹识别/目录扫描
 示例:
   %[1]s -u https://target.com -m finger,dirscan
   %[1]s -u 1.1.1.1 -m port -p 1-65535 -sV --rate 10000
-  %[1]s -f targets.txt -m finger,dirscan --stats
+  %[1]s -l targets.txt -m finger,dirscan --stats
   %[1]s -u target.com --listen -lp 8080
 
 `, prog)
@@ -441,7 +445,7 @@ func validateArgs(args *CLIArgs) error {
 	// 当指定端口扫描时进行基础校验
 	if strings.TrimSpace(args.Ports) != "" {
 		if len(args.Targets) == 0 && strings.TrimSpace(args.TargetFile) == "" {
-			return fmt.Errorf("端口扫描需要通过 -u 或 -f 指定目标")
+			return fmt.Errorf("端口扫描需要通过 -u 或 -l 指定目标")
 		}
 	}
 
@@ -468,7 +472,7 @@ func validateArgs(args *CLIArgs) error {
 	// 端口扫描模块需要指定端口范围
 	if args.HasModule("port") && !args.Listen {
 		if len(args.Targets) == 0 && strings.TrimSpace(args.TargetFile) == "" {
-			return fmt.Errorf("端口扫描需要通过 -u 或 -f 指定目标")
+			return fmt.Errorf("端口扫描需要通过 -u 或 -l 指定目标")
 		}
 	}
 
@@ -481,7 +485,7 @@ func validateArgs(args *CLIArgs) error {
 	} else {
 		// 主动扫描模式：必须指定具体目标或目标文件
 		if len(args.Targets) == 0 && args.TargetFile == "" {
-			return fmt.Errorf("主动扫描模式必须指定目标主机/URL (-u) 或目标文件 (-f)")
+			return fmt.Errorf("主动扫描模式必须指定目标主机/URL (-u) 或目标文件 (-l)")
 		}
 		// 主动模式不允许使用通配符
 		for _, target := range args.Targets {
@@ -659,7 +663,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 
 		// 创建目录扫描模块
 		logger.Debug("创建目录扫描模块...")
-		dirscanModule, err = dirscan.NewDirscanModule(consoleManager)
+		dirscanModule, err = dirscan.NewDirscanModule(collectorInstance)
 		if err != nil {
 			return nil, fmt.Errorf("创建目录扫描模块失败: %v", err)
 		}
@@ -668,7 +672,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 	}
 
 	// 创建指纹识别插件（如果启用）
-	var fingerprintAddon *fingerprint.FingerprintAddon
+	var fingerprintAddon *fpaddon.FingerprintAddon
 	if args.HasModule(string(modulepkg.ModuleFinger)) {
 		logger.Debug("创建指纹识别插件...")
 		fingerprintAddon, err = createFingerprintAddon()
@@ -982,13 +986,13 @@ func aggregatePortResults(results []portscanpkg.OpenPortResult) []report.SDKPort
 }
 
 // createFingerprintAddon 创建指纹识别插件
-func createFingerprintAddon() (*fingerprint.FingerprintAddon, error) {
-	addon, err := fingerprint.CreateDefaultAddon()
+func createFingerprintAddon() (*fpaddon.FingerprintAddon, error) {
+	addon, err := fpaddon.CreateDefaultAddon()
 	if err != nil {
 		return nil, err
 	}
 
-	fingerprint.SetGlobalAddon(addon)
+	fpaddon.SetGlobalAddon(addon)
 	return addon, nil
 }
 
@@ -1012,11 +1016,12 @@ func startApplication(args *CLIArgs) error {
 	// 启动指纹识别模块
 	if args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
 		// 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
-		fingerprint.SetGlobalAddon(app.fingerprintAddon)
+		fpaddon.SetGlobalAddon(app.fingerprintAddon)
 		app.fingerprintAddon.Enable()
 
-		// 使 -vv 在被动模式下生效：控制片段输出
+		// 控制匹配输出粒度
 		app.fingerprintAddon.EnableSnippet(args.VeryVerbose)
+		app.fingerprintAddon.EnableRuleLogging(args.Verbose || args.VeryVerbose)
 
 		// 将指纹识别addon添加到代理服务器
 		app.proxy.AddAddon(app.fingerprintAddon)
@@ -1112,7 +1117,7 @@ func (app *CLIApp) IsProxyStarted() bool {
 }
 
 // GetFingerprintAddon 获取指纹识别插件
-func (app *CLIApp) GetFingerprintAddon() *fingerprint.FingerprintAddon {
+func (app *CLIApp) GetFingerprintAddon() *fpaddon.FingerprintAddon {
 	return app.fingerprintAddon
 }
 
@@ -1380,7 +1385,7 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 	results = deduplicateOpenPorts(results)
 
 	if args.EnableServiceProbe {
-		results = portscanservice.Identify(context.Background(), results, portscanservice.Options{})
+		results = portservice.IdentifyServices(context.Background(), results, portservice.Options{})
 	}
 
 	if printResults {

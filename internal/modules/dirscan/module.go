@@ -1,8 +1,8 @@
 package dirscan
 
 import (
-	"veo/internal/core/console"
 	"veo/internal/core/logger"
+	"veo/internal/utils/collector"
 	"veo/proxy"
 )
 
@@ -22,20 +22,15 @@ type DirscanModule struct {
 }
 
 // NewDirscanModule 创建目录扫描模块
-func NewDirscanModule(consoleManager *console.ConsoleManager) (*DirscanModule, error) {
-    // 使用dirscan模块的SDK接口
-    addon, err := CreateDefaultAddon()
-    if err != nil {
-        return nil, err
-    }
+func NewDirscanModule(col *collector.Collector) (*DirscanModule, error) {
+	addon, err := CreateDefaultAddon()
+	if err != nil {
+		return nil, err
+	}
 
-    // 设置控制台管理器
-    addon.SetConsoleManager(consoleManager)
-
-    // 注入与代理服务器一致的Collector实例，避免采集与扫描使用不同实例
-    if consoleManager != nil && consoleManager.GetCollector() != nil {
-        addon.SetCollector(consoleManager.GetCollector())
-    }
+	if col != nil {
+		addon.SetCollector(col)
+	}
 
 	module := &DirscanModule{
 		addon:  addon,
@@ -53,9 +48,6 @@ func (dm *DirscanModule) Start() error {
 
 	// 启用addon
 	dm.addon.Enable()
-
-	// 启动输入监听器
-	dm.addon.StartInputListener()
 
 	dm.status = ModuleStatusStarted
 	return nil

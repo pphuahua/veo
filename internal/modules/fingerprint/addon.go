@@ -251,6 +251,13 @@ func (fa *FingerprintAddon) EnableSnippet(enabled bool) {
 	}
 }
 
+// EnableRuleLogging 控制是否输出匹配规则内容
+func (fa *FingerprintAddon) EnableRuleLogging(enabled bool) {
+	if fa.engine != nil {
+		fa.engine.EnableRuleLogging(enabled)
+	}
+}
+
 // Enable 启用指纹识别
 func (fa *FingerprintAddon) Enable() {
 	fa.enabled = true

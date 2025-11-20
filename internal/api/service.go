@@ -24,7 +24,7 @@ import (
 	fingerprintinternal "veo/internal/modules/fingerprint"
 	portscanpkg "veo/internal/modules/portscan"
 	masscanrunner "veo/internal/modules/portscan/masscan"
-	portscanservice "veo/internal/modules/portscan/service"
+	portservice "veo/internal/modules/portscan/service/fingerprint"
 	"veo/internal/utils/dictionary"
 	"veo/internal/utils/filter"
 	"veo/internal/utils/httpclient"
@@ -185,7 +185,7 @@ func RunPortscanService(req *PortscanRequest) ([]portscanpkg.OpenPortResult, err
 		enableServiceProbe = *req.Config.Service
 	}
 	if enableServiceProbe && len(results) > 0 {
-		results = portscanservice.Identify(context.Background(), results, portscanservice.Options{})
+		results = portservice.IdentifyServices(context.Background(), results, portservice.Options{})
 		results = deduplicatePorts(results)
 	}
 
@@ -479,11 +479,17 @@ func createFingerprintEngine(cfg *FingerprintModuleConfig) (*fingerprintinternal
 		}
 	}
 
-	snippet := true
+	snippet := false
 	if cfg != nil && cfg.ShowSnippet != nil {
 		snippet = *cfg.ShowSnippet
 	}
 	engine.EnableSnippet(snippet)
+
+	showRule := false
+	if cfg != nil && cfg.ShowRule != nil {
+		showRule = *cfg.ShowRule
+	}
+	engine.EnableRuleLogging(showRule)
 	return engine, nil
 }
 

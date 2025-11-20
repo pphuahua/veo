@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
-
+	"veo/internal/core/logger"
 	"veo/internal/utils/formatter"
 
 	"github.com/lqqyt2423/go-mitmproxy/cert"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 )
 
@@ -141,12 +141,6 @@ func (a *attacker) serveConn(clientTlsConn *tls.Conn, connCtx *ConnContext) {
 }
 
 func (a *attacker) ServeHTTP(res http.ResponseWriter, req *http.Request) {
-	if strings.EqualFold(req.Header.Get("Connection"), "Upgrade") && strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
-		// wss
-		defaultWebSocket.wss(res, req)
-		return
-	}
-
 	if req.URL.Scheme == "" {
 		req.URL.Scheme = "https"
 	}
@@ -294,10 +288,7 @@ func (a *attacker) httpsDial(ctx context.Context, req *http.Request) (net.Conn, 
 
 func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Conn) {
 	connCtx := cconn.(*wrapClientConn).connCtx
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.attacker.httpsTlsDial",
-		"host": connCtx.ClientConn.Conn.RemoteAddr().String(),
-	})
+	prefix := fmt.Sprintf("[Proxy.attacker.httpsTlsDial host=%s]", connCtx.ClientConn.Conn.RemoteAddr().String())
 
 	var clientHello *tls.ClientHelloInfo
 	clientHelloChan := make(chan *tls.ClientHelloInfo)
@@ -347,7 +338,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 	case err := <-errChan1:
 		cconn.Close()
 		conn.Close()
-		log.Debugf("客户端TLS握手失败: %v", err)
+		logger.Debugf("%s 客户端TLS握手失败: %v", prefix, err)
 		return
 	case clientHello = <-clientHelloChan:
 	}
@@ -357,7 +348,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 		cconn.Close()
 		conn.Close()
 		errChan2 <- err
-		log.Debugf("服务器TLS握手失败: %v", err)
+		logger.Debugf("%s 服务器TLS握手失败: %v", prefix, err)
 		return
 	}
 	serverTlsStateChan <- connCtx.ServerConn.tlsState
@@ -367,7 +358,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 	case err := <-errChan1:
 		cconn.Close()
 		conn.Close()
-		log.Debugf("客户端TLS握手完成等待失败: %v", err)
+		logger.Debugf("%s 客户端TLS握手完成等待失败: %v", prefix, err)
 		return
 	case <-clientHandshakeDoneChan:
 	}
@@ -378,10 +369,7 @@ func (a *attacker) httpsTlsDial(ctx context.Context, cconn net.Conn, conn net.Co
 
 func (a *attacker) httpsLazyAttack(ctx context.Context, cconn net.Conn, req *http.Request) {
 	connCtx := cconn.(*wrapClientConn).connCtx
-	log := log.WithFields(log.Fields{
-		"in":   "Proxy.attacker.httpsLazyAttack",
-		"host": connCtx.ClientConn.Conn.RemoteAddr().String(),
-	})
+	prefix := fmt.Sprintf("[Proxy.attacker.httpsLazyAttack host=%s]", connCtx.ClientConn.Conn.RemoteAddr().String())
 
 	clientTlsConn := tls.Server(cconn, &tls.Config{
 		SessionTicketsDisabled: true, // 设置此值为 true ，确保每次都会调用下面的 GetConfigForClient 方法
@@ -400,7 +388,7 @@ func (a *attacker) httpsLazyAttack(ctx context.Context, cconn net.Conn, req *htt
 	})
 	if err := clientTlsConn.HandshakeContext(ctx); err != nil {
 		cconn.Close()
-		log.Debugf("延迟模式TLS握手失败: %v", err)
+		logger.Debugf("%s 延迟模式TLS握手失败: %v", prefix, err)
 		return
 	}
 
@@ -412,11 +400,7 @@ func (a *attacker) httpsLazyAttack(ctx context.Context, cconn net.Conn, req *htt
 func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 	proxy := a.proxy
 
-	log := log.WithFields(log.Fields{
-		"in":     "Proxy.attacker.attack",
-		"url":    req.URL,
-		"method": req.Method,
-	})
+	prefix := fmt.Sprintf("[Proxy.attacker.attack method=%s url=%s]", req.Method, req.URL)
 
 	reply := func(response *Response, body io.Reader) {
 		if response.Header != nil {
@@ -434,19 +418,19 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 		if body != nil {
 			_, err := io.Copy(res, body)
 			if err != nil {
-				logErr(log, err)
+				logErr(prefix, err)
 			}
 		}
 		if response.BodyReader != nil {
 			_, err := io.Copy(res, response.BodyReader)
 			if err != nil {
-				logErr(log, err)
+				logErr(prefix, err)
 			}
 		}
 		if response.Body != nil && len(response.Body) > 0 {
 			_, err := res.Write(response.Body)
 			if err != nil {
-				logErr(log, err)
+				logErr(prefix, err)
 			}
 		}
 	}
@@ -454,7 +438,7 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 	// when addons panic
 	defer func() {
 		if err := recover(); err != nil {
-			log.Warnf("Recovered: %v\n", err)
+			logger.Warnf("%s Recovered: %v", prefix, err)
 		}
 	}()
 
@@ -483,13 +467,13 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 		reqBuf, r, err := formatter.ReaderToBuffer(req.Body, proxy.Opts.StreamLargeBodies)
 		reqBody = r
 		if err != nil {
-			log.Error(err)
+			logger.Errorf("%s %v", prefix, err)
 			res.WriteHeader(502)
 			return
 		}
 
 		if reqBuf == nil {
-			log.Warnf("request body size >= %v\n", proxy.Opts.StreamLargeBodies)
+			logger.Warnf("%s request body size >= %v", prefix, proxy.Opts.StreamLargeBodies)
 			f.Stream = true
 		} else {
 			f.Request.Body = reqBuf
@@ -513,7 +497,7 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 	proxyReqCtx := context.WithValue(req.Context(), proxyReqCtxKey, req)
 	proxyReq, err := http.NewRequestWithContext(proxyReqCtx, f.Request.Method, f.Request.URL.String(), reqBody)
 	if err != nil {
-		log.Error(err)
+		logger.Errorf("%s %v", prefix, err)
 		res.WriteHeader(502)
 		return
 	}
@@ -538,7 +522,7 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 		if f.ConnContext.ServerConn == nil && f.ConnContext.dialFn != nil {
 			if err := f.ConnContext.dialFn(req.Context()); err != nil {
 				// Check for authentication failure
-				log.Error(err)
+				logger.Errorf("%s %v", prefix, err)
 				if strings.Contains(err.Error(), "Proxy Authentication Required") {
 					httpError(res, "", http.StatusProxyAuthRequired)
 					return
@@ -550,7 +534,7 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 		proxyRes, err = f.ConnContext.ServerConn.client.Do(proxyReq)
 	}
 	if err != nil {
-		logErr(log, err)
+		logErr(prefix, err)
 		res.WriteHeader(502)
 		return
 	}
@@ -582,12 +566,12 @@ func (a *attacker) attack(res http.ResponseWriter, req *http.Request) {
 		resBuf, r, err := formatter.ReaderToBuffer(proxyRes.Body, proxy.Opts.StreamLargeBodies)
 		resBody = r
 		if err != nil {
-			log.Error(err)
+			logger.Errorf("%s %v", prefix, err)
 			res.WriteHeader(502)
 			return
 		}
 		if resBuf == nil {
-			log.Warnf("response body size >= %v\n", proxy.Opts.StreamLargeBodies)
+			logger.Warnf("%s response body size >= %v", prefix, proxy.Opts.StreamLargeBodies)
 			f.Stream = true
 		} else {
 			f.Response.Body = resBuf

@@ -73,9 +73,6 @@ addon, err := dirscan.NewDirscanAddon(config)
 ### 依赖注入
 
 ```go
-// 设置控制台管理器
-addon.SetConsoleManager(consoleManager)
-
 // 获取collector（用于代理服务器集成）
 collector := addon.GetCollector()
 
@@ -120,16 +117,13 @@ func main() {
 
 ```go
 // 在core/module包装器中使用
-func NewDirscanModule(consoleManager *console.ConsoleManager) (*DirscanModule, error) {
-    // 使用dirscan模块的SDK接口
+func NewDirscanModule(col *collector.Collector) (*DirscanModule, error) {
     addon, err := dirscan.CreateDefaultAddon()
     if err != nil {
         return nil, err
     }
-    
-    // 设置控制台管理器
-    addon.SetConsoleManager(consoleManager)
-    
+    addon.SetCollector(col)
+
     return &DirscanModule{
         addon:  addon,
         status: StatusStopped,

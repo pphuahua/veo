@@ -8,7 +8,10 @@ import (
 	"veo/internal/core/logger"
 )
 
-var snippetWhitespaceRegex = regexp.MustCompile(`\s+`)
+var (
+	snippetSpaceRegex   = regexp.MustCompile(`[ \t]+`)
+	snippetNewlineRegex = regexp.MustCompile(`\n+`)
+)
 
 // ===========================================
 // DSL解析器实现
@@ -531,10 +534,11 @@ func (p *DSLParser) buildSnippet(content string, start, end int) string {
 }
 
 func normalizeSnippet(snippet string) string {
-	snippet = strings.ReplaceAll(snippet, "\r\n", " ")
-	snippet = strings.ReplaceAll(snippet, "\n", " ")
+	snippet = strings.ReplaceAll(snippet, "\r\n", "\n")
+	snippet = strings.ReplaceAll(snippet, "\r", "\n")
 	snippet = strings.ReplaceAll(snippet, "\t", " ")
-	snippet = snippetWhitespaceRegex.ReplaceAllString(snippet, " ")
+	snippet = snippetSpaceRegex.ReplaceAllString(snippet, " ")
+	snippet = snippetNewlineRegex.ReplaceAllString(snippet, "\n")
 	return strings.TrimSpace(snippet)
 }
 

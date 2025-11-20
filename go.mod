@@ -10,7 +10,6 @@ require (
 	github.com/lqqyt2423/go-mitmproxy v1.8.5
 	github.com/projectdiscovery/gologger v1.1.54
 	github.com/satori/go.uuid v1.2.0
-	github.com/sirupsen/logrus v1.9.3
 	github.com/valyala/fasthttp v1.64.0
 	github.com/xuri/excelize/v2 v2.9.1
 	go.uber.org/atomic v1.11.0
@@ -57,6 +56,7 @@ require (
 	github.com/richardlehane/mscfb v1.0.4 // indirect
 	github.com/richardlehane/msoleps v1.0.4 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/sirupsen/logrus v1.8.1 // indirect
 	github.com/sorairolake/lzip-go v0.3.5 // indirect
 	github.com/therootcompany/xz v1.0.1 // indirect
 	github.com/tiendc/go-deepcopy v1.6.0 // indirect

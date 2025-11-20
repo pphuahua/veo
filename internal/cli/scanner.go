@@ -201,6 +201,7 @@ type ScanController struct {
 	statsDisplay           *stats.StatsDisplay            // 统计显示器
 	lastTargets            []string                       // 最近解析的目标列表
 	showFingerprintSnippet bool                           // 是否展示指纹匹配内容
+	showFingerprintRule    bool                           // 是否展示指纹匹配规则
 	lastPortResults        []portscanpkg.OpenPortResult
 	lastPortExpr           string
 	lastPortRate           int
@@ -290,9 +291,11 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	}
 
 	snippetEnabled := args.VeryVerbose
+	ruleEnabled := args.Verbose || args.VeryVerbose
 
 	if fpEngine != nil {
 		fpEngine.EnableSnippet(snippetEnabled)
+		fpEngine.EnableRuleLogging(ruleEnabled)
 	}
 
 	return &ScanController{
@@ -308,6 +311,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		probedHosts:            make(map[string]bool),              // 初始化探测缓存
 		statsDisplay:           statsDisplay,                       // 初始化统计显示器
 		showFingerprintSnippet: snippetEnabled,
+		showFingerprintRule:    ruleEnabled,
 		portFirstMode:          portFirstMode,
 		maxConcurrent:          threads,
 		retryCount:             retry,
@@ -1612,6 +1616,7 @@ func (sc *ScanController) applyFilter(responses []interfaces.HTTPResponse) (*int
 	// 创建响应过滤器（从外部配置）
 	responseFilter := filter.CreateResponseFilterFromExternal()
 	responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
+	responseFilter.EnableFingerprintRuleDisplay(sc.showFingerprintRule)
 
 	// 应用过滤器
 	filterResult := responseFilter.FilterResponses(responses)
@@ -1632,6 +1637,7 @@ func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPRespon
 	// 创建响应过滤器（从外部配置）
 	responseFilter := filter.CreateResponseFilterFromExternal()
 	responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
+	responseFilter.EnableFingerprintRuleDisplay(sc.showFingerprintRule)
 
 	// [新增] 如果指纹引擎可用，设置到过滤器中（启用二次识别）
 	if sc.fingerprintEngine != nil {
@@ -1736,18 +1742,13 @@ func (sc *ScanController) extractTitleFromHTML(body string) string {
 		return ""
 	}
 
-	// 使用正则表达式提取title标签内容，支持多行
-	titleRegex := regexp.MustCompile(`(?i)<title[^>]*?>(.*?)</title>`)
-	matches := titleRegex.FindStringSubmatch(body)
-	if len(matches) > 1 {
-		title := strings.TrimSpace(matches[1])
-		// 解码HTML实体
-		title = sc.entityDecoder.DecodeHTMLEntities(title)
-		// 清理多余的空白字符
-		title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
-		return title
-	}
-	return ""
+	// 使用共享的标题提取器
+	titleExtractor := shared.NewTitleExtractor()
+	return titleExtractor.ExtractTitle(body)
+}
+
+func (sc *ScanController) formatFingerprintDisplay(name, rule string) string {
+	return formatter.FormatFingerprintDisplay(name, rule, sc.showFingerprintRule)
 }
 
 func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []interfaces.FingerprintMatch {
@@ -1775,6 +1776,32 @@ func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeS
 	}
 
 	return converted
+}
+
+func (sc *ScanController) highlightSnippetLines(snippet, matcher string) []string {
+	if snippet == "" {
+		return nil
+	}
+	snippet = strings.ReplaceAll(snippet, "\r\n", "\n")
+	snippet = strings.ReplaceAll(snippet, "\r", "\n")
+	rawLines := strings.Split(snippet, "\n")
+	var lines []string
+	for _, raw := range rawLines {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		highlighted := formatter.HighlightSnippet(raw, matcher)
+		if highlighted != "" {
+			lines = append(lines, highlighted)
+		}
+	}
+	if len(lines) == 0 {
+		if highlighted := formatter.HighlightSnippet(strings.TrimSpace(snippet), matcher); highlighted != "" {
+			lines = append(lines, highlighted)
+		}
+	}
+	return lines
 }
 
 // performPathProbing 执行path字段主动探测（复用被动模式逻辑）
@@ -2115,10 +2142,13 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 
 		// 手动输出匹配结果（因为没有使用完整的AnalyzeResponse流程）
 		// 使用与指纹引擎一致的高亮格式
-		logger.Infof("%s <%s> <%s> [%s]",
+		display := sc.formatFingerprintDisplay(rule.Name, match.DSLMatched)
+		if display == "" {
+			display = "<" + formatter.FormatFingerprintName(rule.Name) + ">"
+		}
+		logger.Infof("%s %s [%s]",
 			formatter.FormatURL(probeURL),
-			formatter.FormatFingerprintName(rule.Name),
-			formatter.FormatDSLRule(match.DSLMatched),
+			display,
 			formatter.FormatFingerprintTag("主动探测"))
 	}
 
@@ -2257,17 +2287,14 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 			if match == nil {
 				continue
 			}
-			pair := formatter.FormatFingerprintPair(match.RuleName, match.DSLMatched)
-			if pair != "" {
-				pairs = append(pairs, pair)
+			display := sc.formatFingerprintDisplay(match.RuleName, match.DSLMatched)
+			if display != "" {
+				pairs = append(pairs, display)
 			}
 
 			if sc.showFingerprintSnippet {
-				if snippet := strings.TrimSpace(match.Snippet); snippet != "" {
-					highlighted := formatter.HighlightSnippet(snippet, match.DSLMatched)
-					if highlighted != "" {
-						snippetLines = append(snippetLines, highlighted)
-					}
+				for _, line := range sc.highlightSnippetLines(match.Snippet, match.DSLMatched) {
+					snippetLines = append(snippetLines, line)
 				}
 			}
 		}

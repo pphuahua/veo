@@ -61,11 +61,8 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 	if strings.TrimSpace(opts.Ports) == "" {
 		return nil, fmt.Errorf("未指定端口表达式")
 	}
-	if opts.Rate <= 0 {
-		opts.Rate = baseRate
-	}
 	if len(opts.Targets) == 0 && strings.TrimSpace(opts.TargetFile) == "" {
-		return nil, fmt.Errorf("未指定目标 (-u 或 -f)")
+	return nil, fmt.Errorf("未指定目标 (-u 或 -l)")
 	}
 
 	// 解析端口并分片
@@ -136,13 +133,7 @@ func Run(opts portscan.Options) ([]portscan.OpenPortResult, error) {
 		err  error
 	}
 
-	effectiveRate := opts.Rate
-	if effectiveRate <= 0 {
-		effectiveRate = baseRate
-	}
-	if effectiveRate > baseRate {
-		effectiveRate = baseRate
-	}
+	effectiveRate := ComputeEffectiveRate(opts.Rate)
 
 	concurrency := 2
 	if len(tasks) < concurrency {
@@ -399,7 +390,6 @@ type targetGroup struct {
 }
 
 func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
-	const batchSize = 64
 	const maxGroups = 4
 	cleanup := func() {}
 
@@ -413,12 +403,12 @@ func buildTargetGroups(opts portscan.Options) ([]*targetGroup, func(), error) {
 		if len(lines) == 0 {
 			return nil, cleanup, fmt.Errorf("目标文件为空")
 		}
-		if len(lines) <= batchSize {
+		if len(lines) <= targetBatchSize {
 			return []*targetGroup{{count: len(lines), filePath: filePath}}, cleanup, nil
 		}
 		chunkSize := (len(lines) + maxGroups - 1) / maxGroups
-		if chunkSize > batchSize {
-			chunkSize = batchSize
+		if chunkSize > targetBatchSize {
+			chunkSize = targetBatchSize
 		}
 		var tempFiles []string
 		groups := make([]*targetGroup, 0)
@@ -565,14 +555,10 @@ func expandCIDRTarget(expr string, emit func([]string) error) error {
 	current := make(net.IP, len(network))
 	copy(current, network)
 
-	var (
-		batch []string
-		total int
-	)
+	var batch []string
 
 	for ipNet.Contains(current) {
 		batch = append(batch, current.String())
-		total++
 		if len(batch) >= targetBatchSize {
 			if err := emit(append([]string(nil), batch...)); err != nil {
 				return err
@@ -648,13 +634,9 @@ func expandLastOctetRange(prefix string, start, end int, emit func([]string) err
 	if end > 255 {
 		end = 255
 	}
-	var (
-		batch []string
-		total int
-	)
+	var batch []string
 	for oct := start; oct <= end; oct++ {
 		batch = append(batch, fmt.Sprintf("%s%d", prefix, oct))
-		total++
 		if len(batch) >= targetBatchSize {
 			if err := emit(append([]string(nil), batch...)); err != nil {
 				return err
@@ -671,13 +653,9 @@ func expandLastOctetRange(prefix string, start, end int, emit func([]string) err
 }
 
 func emitIPUintRange(start, end uint32, emit func([]string) error) error {
-	var (
-		batch []string
-		total int
-	)
+	var batch []string
 	for cur := start; ; cur++ {
 		batch = append(batch, uint32ToIPv4String(cur))
-		total++
 		if len(batch) >= targetBatchSize {
 			if err := emit(append([]string(nil), batch...)); err != nil {
 				return err

@@ -107,6 +107,8 @@ aspcms:
 aspnet-mvc:
   dsl:
     - "contains(body, 'asp.net mvc application</p>')"
+    - "contains(header, 'ASP.NET_SessionId','ASP.NET','AspNetMvc')"
+
 
 cisco-iox:
   dsl:
@@ -2037,6 +2039,7 @@ casdoor:
     - "contains(body, 'images/yiyaoshi.png')"
     - "contains(body, '全程云')"
     - "contains(body, 'location.href='/oa/'')"
+
 asp.net-viewstate:
   dsl:
     - "contains(body, 'id=\"__VIEWSTATE\" value=\"')"

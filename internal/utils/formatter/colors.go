@@ -182,6 +182,20 @@ func FormatFingerprintPair(name, rule string) string {
 	return "<" + FormatFingerprintName(name) + "> <" + FormatDSLRule(rule) + ">"
 }
 
+// FormatFingerprintDisplay 根据开关决定是否携带规则内容
+func FormatFingerprintDisplay(name, rule string, showRule bool) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if showRule {
+		if formatted := FormatFingerprintPair(name, rule); formatted != "" {
+			return formatted
+		}
+	}
+	return "<" + FormatFingerprintName(name) + ">"
+}
+
 // FormatFingerprintTag 格式化指纹标签显示（指纹识别专用）
 func FormatFingerprintTag(tag string) string {
 	if !shouldUseColors() {

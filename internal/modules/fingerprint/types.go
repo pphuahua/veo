@@ -77,6 +77,7 @@ type Engine struct {
 	staticFileFilterEnabled  bool
 	contentTypeFilterEnabled bool
 	showSnippet              bool
+	showRules                bool
 	loadedSummaries          []string // 已加载规则文件摘要，例如 finger.yaml:754
 }
 
@@ -126,16 +127,6 @@ func (sl *StringList) UnmarshalYAML(value *yaml.Node) error {
 	default:
 		return fmt.Errorf("unsupported YAML node for string list: %v", value.Kind)
 	}
-}
-
-// Values 返回底层切片副本（避免外部修改）
-func (sl StringList) Values() []string {
-	if len(sl) == 0 {
-		return nil
-	}
-	result := make([]string, len(sl))
-	copy(result, sl)
-	return result
 }
 
 // HasPaths 判断规则是否包含主动探测路径

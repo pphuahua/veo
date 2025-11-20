@@ -35,6 +35,7 @@ type FingerprintRequest struct {
 
 type FingerprintModuleConfig struct {
 	ShowSnippet *bool `json:"show_snippet,omitempty"`
+	ShowRule    *bool `json:"show_rule,omitempty"`
 }
 
 type PortscanRequest struct {
