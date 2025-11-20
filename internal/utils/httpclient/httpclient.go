@@ -10,6 +10,7 @@ import (
 	"veo/internal/core/config"
 	"veo/internal/core/logger"
 	"veo/internal/core/useragent"
+	"veo/internal/utils/redirect"
 )
 
 // ===========================================
@@ -141,13 +142,59 @@ func (c *Client) MakeRequestWithHeaders(rawURL string, headers map[string]string
 	return c.executeRequest(rawURL, headers)
 }
 
+// MakeRequestFull 实现扩展的HTTP请求接口，返回响应头
+func (c *Client) MakeRequestFull(rawURL string) (body string, statusCode int, headers map[string][]string, err error) {
+	return c.executeRequestFull(rawURL, nil)
+}
+
 func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) (body string, statusCode int, err error) {
+	body, statusCode, _, err = c.executeRequestFull(rawURL, customHeaders)
+	return
+}
+
+func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+	url := rawURL
+
+	// 限制客户端重定向次数为3次
+	maxClientRedirects := 3
+
+	for i := 0; i <= maxClientRedirects; i++ {
+		body, statusCode, headers, err = c.doRequestInternal(url, customHeaders)
+		if err != nil {
+			return body, statusCode, headers, err
+		}
+
+		if !c.followRedirect {
+			return body, statusCode, headers, nil
+		}
+
+		// 检测客户端重定向
+		redirectURL := redirect.DetectClientRedirectURL(body)
+		if redirectURL == "" {
+			return body, statusCode, headers, nil
+		}
+
+		// 解析新的URL
+		nextURL := redirect.ResolveRedirectURL(url, redirectURL)
+		if nextURL == "" {
+			logger.Debugf("无法解析客户端重定向URL: %s (Base: %s)", redirectURL, url)
+			return body, statusCode, headers, nil
+		}
+
+		logger.Debugf("HTTPClient 捕获客户端重定向 (%d/%d): %s -> %s", i+1, maxClientRedirects, url, nextURL)
+		url = nextURL
+	}
+
+	return body, statusCode, headers, err
+}
+
+func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
 	logger.Debugf("发起请求: %s (跟随重定向: %v)", rawURL, c.followRedirect)
 
 	// 创建请求
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
-		return "", 0, fmt.Errorf("创建请求失败: %v", err)
+		return "", 0, nil, fmt.Errorf("创建请求失败: %v", err)
 	}
 
 	// 设置请求头
@@ -165,7 +212,7 @@ func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) 
 	// 发起请求
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", 0, c.handleRequestError(err)
+		return "", 0, nil, c.handleRequestError(err)
 	}
 	defer resp.Body.Close()
 
@@ -174,14 +221,20 @@ func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) 
 		logger.Debugf("检测到重定向响应 %d，但未启用跟随: %s", resp.StatusCode, rawURL)
 	}
 
+	// 提取响应头
+	headers = make(map[string][]string)
+	for k, v := range resp.Header {
+		headers[k] = v
+	}
+
 	// 读取响应体
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", resp.StatusCode, fmt.Errorf("读取响应体失败: %v", err)
+		return "", resp.StatusCode, headers, fmt.Errorf("读取响应体失败: %v", err)
 	}
 
 	logger.Debugf("请求完成: %s [%d] 响应体: %d bytes", rawURL, resp.StatusCode, len(respBody))
-	return string(respBody), resp.StatusCode, nil
+	return string(respBody), resp.StatusCode, headers, nil
 }
 
 // ===========================================

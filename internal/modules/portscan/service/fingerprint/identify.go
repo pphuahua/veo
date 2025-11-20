@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"veo/internal/core/logger"
-	portscanpkg "veo/internal/modules/portscan"
+	"veo/pkg/types"
 )
 
 // Options 控制服务识别的并发与超时
@@ -20,7 +20,7 @@ type Options struct {
 }
 
 // IdentifyServices 使用指纹库识别端口服务，直接在结果上更新 Service 字段。
-func IdentifyServices(ctx context.Context, results []portscanpkg.OpenPortResult, opts Options) []portscanpkg.OpenPortResult {
+func IdentifyServices(ctx context.Context, results []types.OpenPortResult, opts Options) []types.OpenPortResult {
 	if len(results) == 0 {
 		return results
 	}

@@ -207,8 +207,35 @@ func (bf *BaseHashFilter) calculateTolerantContentLength(originalLength int64) i
 		return originalLength
 	}
 
-	// 将ContentLength按容错阈值分组，同一组内的长度被认为是相同的
-	tolerantLength := (originalLength / bf.tolerance) * bf.tolerance
+	// [优化] 基于量级的动态容错机制
+	// 解决Soft 404页面因反射参数（如URL）导致长度差异较大，无法归入同一桶的问题
+	// 采用分级固定步长策略，避免因Length本身作为基数计算Tolerance导致的桶错位问题
+
+	var step int64
+	if originalLength < 1000 {
+		// 小文件：使用配置的tolerance（默认50）或50
+		step = bf.tolerance
+		if step > 50 {
+			step = 50
+		} // 限制最大值
+	} else if originalLength < 5000 {
+		// 1k-5k：容错500（足以覆盖大部分URL反射差异）
+		step = 500
+	} else if originalLength < 10000 {
+		// 5k-10k：容错1000
+		step = 1000
+	} else {
+		// >10k：容错2000
+		step = 2000
+	}
+
+	// 确保step不小于配置的基础tolerance（如果用户配置了很大的值）
+	if step < bf.tolerance {
+		step = bf.tolerance
+	}
+
+	// 使用四舍五入进行分桶
+	tolerantLength := ((originalLength + step/2) / step) * step
 	return tolerantLength
 }
 

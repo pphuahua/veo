@@ -8,14 +8,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
-	"veo/internal/core/config"
+
+	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	"veo/internal/utils/formatter"
+	"veo/internal/utils/redirect"
 	"veo/internal/utils/shared"
 
 	"gopkg.in/yaml.v3"
@@ -292,108 +293,55 @@ func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient in
 		e.outputFingerprintMatches(matches, response, "")
 	}
 
-	// [增强] 支持基于HTML的客户端重定向（meta refresh / JavaScript location）
-	// 适用场景：响应返回200，但通过 <meta refresh> 或 <script>location=...</script> 指示跳转
-	// 仅在存在HTTP客户端时尝试一次重定向抓取，避免递归/循环
-	if httpClient != nil {
-		if redirectURL := e.detectClientRedirectURL(response); redirectURL != "" {
-			// 将相对地址解析为绝对URL
-			absURL := e.resolveRedirectURL(response.URL, redirectURL)
-			if absURL != "" {
-				if client, ok := httpClient.(interface {
-					MakeRequest(string) (string, int, error)
-				}); ok {
-					body, statusCode, err := client.MakeRequest(absURL)
-					if err == nil && body != "" {
-						// 构造最小可用的HTTPResponse用于再次匹配
-						// 说明：此路径无法获取响应头部与Content-Type，但对大多数基于Body/Title的指纹匹配已足够
-						titleExtractor := shared.NewTitleExtractor()
-						title := titleExtractor.ExtractTitle(body)
-						redirected := &HTTPResponse{
-							URL:           absURL,
-							Method:        "GET",
-							StatusCode:    statusCode,
-							Headers:       map[string][]string{},
-							Body:          body,
-							ContentType:   "",
-							ContentLength: int64(len(body)),
-							Server:        "",
-							Title:         title,
-						}
-						// 静默匹配并合并输出
-						rMatches := e.AnalyzeResponseWithClientSilent(redirected, httpClient)
-						if len(rMatches) > 0 {
-							e.outputFingerprintMatches(rMatches, redirected, "")
-							matches = append(matches, rMatches...)
-						}
-					} else if err != nil {
-						logger.Debugf("客户端重定向抓取失败: %s, 错误: %v", absURL, err)
-					}
+	if fetcher, ok := httpClient.(redirect.HTTPFetcher); ok {
+		if redirected, err := redirect.FollowClientRedirect(convertToInterfacesResponse(response), fetcher); err == nil && redirected != nil {
+			converted := convertFromInterfacesResponse(redirected)
+			if converted != nil {
+				rMatches := e.AnalyzeResponseWithClientSilent(converted, httpClient)
+				if len(rMatches) > 0 {
+					e.outputFingerprintMatches(rMatches, converted, "")
+					matches = append(matches, rMatches...)
 				}
 			}
+		} else if err != nil {
+			logger.Debugf("客户端重定向抓取失败: %v", err)
 		}
 	}
 
 	return matches
 }
 
-// detectClientRedirectURL 从HTML响应体中检测客户端重定向URL（支持meta refresh与多种JS写法）
-// 参数：
-//   - response: 原始HTTP响应
-//
-// 返回：
-//   - string: 若检测到重定向，返回目标URL（可能为相对路径）；否则返回空字符串
-func (e *Engine) detectClientRedirectURL(response *HTTPResponse) string {
-	if response == nil || response.Body == "" {
-		return ""
+func convertToInterfacesResponse(resp *HTTPResponse) *interfaces.HTTPResponse {
+	if resp == nil {
+		return nil
 	}
-	body := response.Body
-	// 1) <meta http-equiv="refresh" content="0;url=/path">（大小写与空白不敏感）
-	// 提取content中的url参数
-	metaRe := regexp.MustCompile(`(?is)<meta[^>]*http-equiv\s*=\s*['\"]?refresh['\"]?[^>]*content\s*=\s*['\"][^'\"]*url\s*=\s*([^'\">\s]+)`)
-	if m := metaRe.FindStringSubmatch(body); len(m) >= 2 {
-		return strings.TrimSpace(m[1])
+	return &interfaces.HTTPResponse{
+		URL:             resp.URL,
+		Method:          resp.Method,
+		StatusCode:      resp.StatusCode,
+		Title:           resp.Title,
+		ContentType:     resp.ContentType,
+		ContentLength:   resp.ContentLength,
+		Body:            resp.Body,
+		ResponseHeaders: resp.ResponseHeaders,
 	}
-	// 2) JavaScript 形式：location='...'; location.href="..."; window.location=...; top.location=...
-	jsPatterns := []string{
-		`(?is)location\s*=\s*['\"]([^'\"]+)['\"]`,
-		`(?is)location\.href\s*=\s*['\"]([^'\"]+)['\"]`,
-		`(?is)window\.location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`,
-		`(?is)top\.location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`,
-	}
-	for _, pat := range jsPatterns {
-		re := regexp.MustCompile(pat)
-		if m := re.FindStringSubmatch(body); len(m) >= 2 {
-			return strings.TrimSpace(m[1])
-		}
-	}
-	return ""
 }
 
-// resolveRedirectURL 解析相对跳转地址为绝对URL
-// 参数：
-//   - baseRaw: 原始响应的URL
-//   - ref: 重定向目标（可能为相对/协议相对/绝对）
-//
-// 返回：
-//   - string: 解析得到的绝对URL，解析失败时返回空字符串
-func (e *Engine) resolveRedirectURL(baseRaw, ref string) string {
-	if strings.TrimSpace(ref) == "" {
-		return ""
+func convertFromInterfacesResponse(resp *interfaces.HTTPResponse) *HTTPResponse {
+	if resp == nil {
+		return nil
 	}
-	base, err := url.Parse(baseRaw)
-	if err != nil {
-		return ""
+	return &HTTPResponse{
+		URL:             resp.URL,
+		Method:          resp.Method,
+		StatusCode:      resp.StatusCode,
+		Body:            resp.Body,
+		ContentType:     resp.ContentType,
+		ContentLength:   resp.ContentLength,
+		Server:          resp.Server,
+		Title:           resp.Title,
+		ResponseHeaders: resp.ResponseHeaders,
 	}
-	// 处理协议相对URL（//host/path）
-	if strings.HasPrefix(ref, "//") {
-		ref = base.Scheme + ":" + ref
-	}
-	// 使用URL解析与合并
-	if u, err := url.Parse(ref); err == nil {
-		return base.ResolveReference(u).String()
-	}
-	return ""
 }
 
 // AnalyzeResponseWithClientSilent 分析响应包并进行指纹识别（静默版本，不自动输出结果）
@@ -553,7 +501,7 @@ func (e *Engine) createDSLContext(response *HTTPResponse) *DSLContext {
 func (e *Engine) createDSLContextWithClient(response *HTTPResponse, httpClient interface{}, baseURL string) *DSLContext {
 	// 构建http.Header
 	headers := make(http.Header)
-	for name, values := range response.Headers {
+	for name, values := range response.ResponseHeaders {
 		headers[name] = values
 	}
 
@@ -697,12 +645,7 @@ func (e *Engine) GetRulesCount() int {
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *EngineConfig {
-	// [修复] 从全局配置读取并发数，保持与全局配置一致
-	globalConfig := config.GetRequestConfig()
 	maxConcurrency := 20 // 默认最小并发数
-	if globalConfig.Threads > 0 {
-		maxConcurrency = globalConfig.Threads
-	}
 
 	return &EngineConfig{
 		RulesPath:       "configs/fingerprint/", // [修改] 改为目录路径，自动加载所有YAML文件
@@ -1077,15 +1020,15 @@ func (e *Engine) performRuleRequest(rule *FingerprintRule, probeURL, baseURL str
 	}
 
 	response := &HTTPResponse{
-		URL:           probeURL,
-		Method:        "GET",
-		StatusCode:    statusCode,
-		Headers:       make(map[string][]string),
-		Body:          body,
-		ContentType:   "text/html",
-		ContentLength: int64(len(body)),
-		Server:        "",
-		Title:         extractTitleFromHTML(body),
+		URL:             probeURL,
+		Method:          "GET",
+		StatusCode:      statusCode,
+		ResponseHeaders: make(map[string][]string),
+		Body:            body,
+		ContentType:     "text/html",
+		ContentLength:   int64(len(body)),
+		Server:          "",
+		Title:           shared.ExtractTitle(body),
 	}
 
 	ctx := e.createDSLContextWithClient(response, httpClient, baseURL)
@@ -1132,15 +1075,15 @@ func (e *Engine) perform404PageProbing(baseURL string, httpClient interface{}) {
 
 		// 构造模拟的HTTPResponse用于DSL匹配
 		response := &HTTPResponse{
-			URL:           notFoundURL,
-			Method:        "GET",
-			StatusCode:    statusCode,
-			Headers:       make(map[string][]string), // 简化版，暂不解析响应头
-			Body:          body,
-			ContentType:   "text/html", // 简化假设
-			ContentLength: int64(len(body)),
-			Server:        "",
-			Title:         extractTitleFromHTML(body),
+			URL:             notFoundURL,
+			Method:          "GET",
+			StatusCode:      statusCode,
+			ResponseHeaders: make(map[string][]string), // 简化版，暂不解析响应头
+			Body:            body,
+			ContentType:     "text/html", // 简化假设
+			ContentLength:   int64(len(body)),
+			Server:          "",
+			Title:           shared.ExtractTitle(body),
 		}
 
 		logger.Debugf("404页面响应: 状态码=%d, 标题='%s', 内容长度=%d",
@@ -1284,10 +1227,4 @@ func (e *Engine) MatchSpecificRule(rule *FingerprintRule, response *HTTPResponse
 	ctx := e.createDSLContextWithClient(response, httpClient, baseURL)
 	// 匹配指定规则
 	return e.matchRule(rule, ctx)
-}
-
-// extractTitleFromHTML 从HTML中提取标题（使用共享工具）
-func extractTitleFromHTML(htmlContent string) string {
-	extractor := shared.NewTitleExtractor()
-	return extractor.ExtractTitle(htmlContent)
 }

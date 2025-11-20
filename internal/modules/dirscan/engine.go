@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"veo/internal/core/config"
+
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
 	report "veo/internal/modules/reporter"
@@ -205,29 +205,17 @@ func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
 	if e.requestProcessor == nil {
 		logger.Debug("创建新的请求处理器")
 		e.requestProcessor = requests.NewRequestProcessor(nil)
-		logger.Debug("准备应用自定义HTTP头部")
-		e.applyCustomHeadersToProcessor(e.requestProcessor)
+		// Custom headers should be set via SetCustomHeaders method by the caller
 	}
 
 	return e.requestProcessor
 }
 
-// applyCustomHeadersToProcessor 应用自定义HTTP头部到请求处理器
-func (e *Engine) applyCustomHeadersToProcessor(processor *requests.RequestProcessor) {
-	// 从配置系统获取自定义头部
-	customHeaders := config.GetCustomHeaders()
-
-	if len(customHeaders) > 0 {
-		processor.SetCustomHeaders(customHeaders)
-		logger.Debugf("应用了 %d 个自定义HTTP头部到请求处理器", len(customHeaders))
-
-		// 记录应用的头部（调试用）
-		for key, value := range customHeaders {
-			logger.Debugf("自定义头部: %s = %s", key, value)
-		}
-	} else {
-		logger.Debug("未发现自定义HTTP头部，启用自动认证检测")
-	}
+// SetCustomHeaders 设置自定义HTTP头部
+func (e *Engine) SetCustomHeaders(headers map[string]string) {
+	processor := e.getOrCreateRequestProcessor()
+	processor.SetCustomHeaders(headers)
+	logger.Debugf("应用了 %d 个自定义HTTP头部到请求处理器", len(headers))
 }
 
 // getActualConcurrency 获取实际的并发数（用于日志显示）

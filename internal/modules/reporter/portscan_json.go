@@ -6,8 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
 	"veo/internal/core/logger"
-	"veo/internal/modules/portscan"
+	"veo/internal/core/types"
 )
 
 // PortscanJSONSummary 简要统计
@@ -19,8 +20,8 @@ type PortscanJSONSummary struct {
 
 // PortscanJSONFile 输出结构
 type PortscanJSONFile struct {
-	Summary PortscanJSONSummary       `json:"summary"`
-	Results []portscan.OpenPortResult `json:"results"`
+	Summary PortscanJSONSummary    `json:"summary"`
+	Results []types.OpenPortResult `json:"results"`
 }
 
 // GeneratePortscanJSON 生成端口扫描JSON报告（默认路径）
@@ -29,7 +30,7 @@ type PortscanJSONFile struct {
 //   - target: 目标标识（用于文件名提示）
 //
 // 返回：输出文件路径
-func GeneratePortscanJSON(results []portscan.OpenPortResult, target string) (string, error) {
+func GeneratePortscanJSON(results []types.OpenPortResult, target string) (string, error) {
 	ts := time.Now().Format("20060102_150405")
 	if target == "" {
 		target = "portscan"
@@ -44,7 +45,7 @@ func GeneratePortscanJSON(results []portscan.OpenPortResult, target string) (str
 }
 
 // GenerateCustomPortscanJSON 生成端口扫描JSON报告（自定义路径）
-func GenerateCustomPortscanJSON(results []portscan.OpenPortResult, target, outputPath string) (string, error) {
+func GenerateCustomPortscanJSON(results []types.OpenPortResult, target, outputPath string) (string, error) {
 	data := PortscanJSONFile{
 		Summary: PortscanJSONSummary{
 			Count:      len(results),

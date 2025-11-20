@@ -6,14 +6,15 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"veo/internal/core/config"
 	"veo/internal/core/interfaces"
+	"veo/internal/core/logger"
 	modulepkg "veo/internal/core/module"
+	"veo/internal/core/types"
 	"veo/internal/core/useragent"
 	"veo/internal/modules/fingerprint"
 	portscanpkg "veo/internal/modules/portscan"
@@ -28,11 +29,23 @@ import (
 	"veo/internal/utils/scheduler"
 	"veo/internal/utils/stats"
 
-	"veo/internal/core/logger"
-
 	"path/filepath"
 	sharedutils "veo/internal/utils/shared"
 )
+
+func toReporterStats(stats *fingerprint.Statistics) *report.FingerprintStats {
+	if stats == nil {
+		return nil
+	}
+	return &report.FingerprintStats{
+		TotalRequests:    stats.TotalRequests,
+		MatchedRequests:  stats.MatchedRequests,
+		FilteredRequests: stats.FilteredRequests,
+		RulesLoaded:      stats.RulesLoaded,
+		StartTime:        stats.StartTime,
+		LastMatchTime:    stats.LastMatchTime,
+	}
+}
 
 // FingerprintProgressTracker 指纹识别进度跟踪器
 type FingerprintProgressTracker struct {
@@ -192,16 +205,15 @@ type ScanController struct {
 	requestProcessor       *requests.RequestProcessor
 	urlGenerator           *generator.URLGenerator
 	contentManager         *generator.ContentManager
-	fingerprintEngine      *fingerprint.Engine            // 指纹识别引擎
-	encodingDetector       *fingerprint.EncodingDetector  // 编码检测器
-	entityDecoder          *fingerprint.HTMLEntityDecoder // HTML实体解码器
-	probedHosts            map[string]bool                // 已探测的主机缓存（用于path探测去重）
-	probedMutex            sync.RWMutex                   // 探测缓存锁
-	progressTracker        *FingerprintProgressTracker    // 指纹识别进度跟踪器
-	statsDisplay           *stats.StatsDisplay            // 统计显示器
-	lastTargets            []string                       // 最近解析的目标列表
-	showFingerprintSnippet bool                           // 是否展示指纹匹配内容
-	showFingerprintRule    bool                           // 是否展示指纹匹配规则
+	fingerprintEngine      *fingerprint.Engine           // 指纹识别引擎
+	encodingDetector       *fingerprint.EncodingDetector // 编码检测器
+	probedHosts            map[string]bool               // 已探测的主机缓存（用于path探测去重）
+	probedMutex            sync.RWMutex                  // 探测缓存锁
+	progressTracker        *FingerprintProgressTracker   // 指纹识别进度跟踪器
+	statsDisplay           *stats.StatsDisplay           // 统计显示器
+	lastTargets            []string                      // 最近解析的目标列表
+	showFingerprintSnippet bool                          // 是否展示指纹匹配内容
+	showFingerprintRule    bool                          // 是否展示指纹匹配规则
 	lastPortResults        []portscanpkg.OpenPortResult
 	lastPortExpr           string
 	lastPortRate           int
@@ -306,10 +318,9 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		urlGenerator:           generator.NewURLGenerator(),
 		contentManager:         generator.NewContentManager(),
 		fingerprintEngine:      fpEngine,
-		encodingDetector:       fingerprint.GetEncodingDetector(),  // 初始化编码检测器
-		entityDecoder:          fingerprint.GetHTMLEntityDecoder(), // 初始化HTML实体解码器
-		probedHosts:            make(map[string]bool),              // 初始化探测缓存
-		statsDisplay:           statsDisplay,                       // 初始化统计显示器
+		encodingDetector:       fingerprint.GetEncodingDetector(), // 初始化编码检测器
+		probedHosts:            make(map[string]bool),             // 初始化探测缓存
+		statsDisplay:           statsDisplay,                      // 初始化统计显示器
 		showFingerprintSnippet: snippetEnabled,
 		showFingerprintRule:    ruleEnabled,
 		portFirstMode:          portFirstMode,
@@ -572,11 +583,13 @@ func (sc *ScanController) buildScanParams() map[string]interface{} {
 }
 
 func (sc *ScanController) generateConsoleJSON(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
-	var matches []*fingerprint.FingerprintMatch
-	var stats *fingerprint.Statistics
+	var matches []types.FingerprintMatch
+	var stats *report.FingerprintStats
 	if sc.fingerprintEngine != nil {
-		matches = sc.fingerprintEngine.GetMatches()
-		stats = sc.fingerprintEngine.GetStats()
+		if raw := sc.fingerprintEngine.GetMatches(); len(raw) > 0 {
+			matches = convertFingerprintMatches(raw, sc.showFingerprintSnippet)
+		}
+		stats = toReporterStats(sc.fingerprintEngine.GetStats())
 	}
 
 	if len(fingerprintPages) == 0 && sc.args.HasModule(string(modulepkg.ModuleFinger)) {
@@ -707,7 +720,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 		parser := batch.NewTargetParser()
 		fileTargets, err := parser.ParseFile(sc.args.TargetFile)
 		if err != nil {
-			return nil, fmt.Errorf("读取目标文件失败: %v", err)
+			return nil, err
 		}
 		allTargets = append(allTargets, fileTargets...)
 		logger.Debugf("从文件读取到 %d 个目标", len(fileTargets))
@@ -1490,16 +1503,18 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 		}
 
 		// 指纹匹配信息
-		var matches []*fingerprint.FingerprintMatch
+		var matches []types.FingerprintMatch
 		var stats *fingerprint.Statistics
 		if sc.fingerprintEngine != nil {
-			matches = sc.fingerprintEngine.GetMatches()
+			if raw := sc.fingerprintEngine.GetMatches(); len(raw) > 0 {
+				matches = convertFingerprintMatches(raw, sc.showFingerprintSnippet)
+			}
 			stats = sc.fingerprintEngine.GetStats()
 		}
 		params := sc.buildScanParams()
 
 		// 复用合并JSON构建器，写入指定路径
-		jsonStr, err := report.GenerateCombinedJSON(sc.lastDirscanResults, sc.lastFingerprintResults, matches, stats, pr, params)
+		jsonStr, err := report.GenerateCombinedJSON(sc.lastDirscanResults, sc.lastFingerprintResults, matches, toReporterStats(stats), pr, params)
 		if err != nil {
 			return "", err
 		}
@@ -1586,7 +1601,7 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 
 		// 获取指纹匹配结果和统计信息
 		matches := sc.fingerprintEngine.GetMatches()
-		stats := sc.fingerprintEngine.GetStats()
+		stats := toReporterStats(sc.fingerprintEngine.GetStats())
 		if stats != nil {
 			scanParams["fingerprint_rules_loaded"] = stats.RulesLoaded
 		}
@@ -1594,7 +1609,7 @@ func (sc *ScanController) generateJSONReport(filterResult *interfaces.FilterResu
 		fingerprintResponses := filterResult.ValidPages
 
 		// 生成指纹识别JSON报告
-		return report.GenerateCustomJSONFingerprintReport(fingerprintResponses, matches, stats, target, scanParams, outputPath)
+		return report.GenerateCustomJSONFingerprintReport(fingerprintResponses, convertFingerprintMatches(matches, sc.showFingerprintSnippet), stats, target, scanParams, outputPath)
 	} else {
 		// 目录扫描JSON报告
 		// 添加目录扫描特定参数
@@ -1686,15 +1701,15 @@ func (sc *ScanController) convertToFingerprintResponse(resp *interfaces.HTTPResp
 		resp.URL, len(resp.ResponseBody), len(processedBody))
 
 	return &fingerprint.HTTPResponse{
-		URL:           resp.URL,
-		Method:        "GET", // 主动扫描默认使用GET方法
-		StatusCode:    resp.StatusCode,
-		Headers:       headers,
-		Body:          processedBody, // 使用处理后的响应体
-		ContentType:   resp.ContentType,
-		ContentLength: int64(len(processedBody)), // 更新为处理后的长度
-		Server:        resp.Server,
-		Title:         title, // 使用处理后的标题
+		URL:             resp.URL,
+		Method:          "GET", // 主动扫描默认使用GET方法
+		StatusCode:      resp.StatusCode,
+		ResponseHeaders: headers,
+		Body:            processedBody, // 使用处理后的响应体
+		ContentType:     resp.ContentType,
+		ContentLength:   int64(len(processedBody)), // 更新为处理后的长度
+		Server:          resp.Server,
+		Title:           title, // 使用处理后的标题
 	}
 }
 
@@ -1738,36 +1753,29 @@ func (sc *ScanController) decompressResponseBody(body string, headers map[string
 
 // extractTitleFromHTML 从HTML中提取标题（复用fingerprint/addon.go的逻辑）
 func (sc *ScanController) extractTitleFromHTML(body string) string {
-	if body == "" {
-		return ""
-	}
-
-	// 使用共享的标题提取器
-	titleExtractor := shared.NewTitleExtractor()
-	return titleExtractor.ExtractTitle(body)
+	return sharedutils.ExtractTitle(body)
 }
 
 func (sc *ScanController) formatFingerprintDisplay(name, rule string) string {
 	return formatter.FormatFingerprintDisplay(name, rule, sc.showFingerprintRule)
 }
 
-func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []interfaces.FingerprintMatch {
+func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []types.FingerprintMatch {
 	if len(matches) == 0 {
 		return nil
 	}
 
-	converted := make([]interfaces.FingerprintMatch, 0, len(matches))
+	converted := make([]types.FingerprintMatch, 0, len(matches))
 	for _, match := range matches {
 		if match == nil {
 			continue
 		}
 
-		timestamp := match.Timestamp.Unix()
-		convertedMatch := interfaces.FingerprintMatch{
+		convertedMatch := types.FingerprintMatch{
 			URL:       match.URL,
 			RuleName:  match.RuleName,
 			Matcher:   match.DSLMatched,
-			Timestamp: timestamp,
+			Timestamp: match.Timestamp,
 		}
 		if includeSnippet {
 			convertedMatch.Snippet = match.Snippet
@@ -2124,15 +2132,15 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 
 	// 构造模拟的HTTPResponse用于DSL匹配
 	response := &fingerprint.HTTPResponse{
-		URL:           probeURL,
-		Method:        "GET",
-		StatusCode:    statusCode,
-		Headers:       make(map[string][]string), // 简化版，暂不解析响应头
-		Body:          body,
-		ContentType:   "text/html", // 简化假设
-		ContentLength: int64(len(body)),
-		Server:        "",
-		Title:         sc.extractTitleFromHTML(body), // 复用现有的标题提取方法
+		URL:             probeURL,
+		Method:          "GET",
+		StatusCode:      statusCode,
+		ResponseHeaders: make(map[string][]string), // 简化版，暂不解析响应头
+		Body:            body,
+		ContentType:     "text/html", // 简化假设
+		ContentLength:   int64(len(body)),
+		Server:          "",
+		Title:           sc.extractTitleFromHTML(body), // 复用现有的标题提取方法
 	}
 
 	// 性能优化：使用专用的单规则匹配，避免遍历所有525个规则
@@ -2255,15 +2263,15 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 
 	// 构造模拟的HTTPResponse用于DSL匹配
 	response := &fingerprint.HTTPResponse{
-		URL:           notFoundURL,
-		Method:        "GET",
-		StatusCode:    statusCode,
-		Headers:       make(map[string][]string), // 简化版，暂不解析响应头
-		Body:          body,
-		ContentType:   "text/html", // 简化假设
-		ContentLength: int64(len(body)),
-		Server:        "",
-		Title:         sc.extractTitleFromHTML(body), // 提取标题
+		URL:             notFoundURL,
+		Method:          "GET",
+		StatusCode:      statusCode,
+		ResponseHeaders: make(map[string][]string), // 简化版，暂不解析响应头
+		Body:            body,
+		ContentType:     "text/html", // 简化假设
+		ContentLength:   int64(len(body)),
+		Server:          "",
+		Title:           sc.extractTitleFromHTML(body), // 提取标题
 	}
 
 	// 对404页面进行全量指纹规则匹配（使用静默模式避免重复输出）

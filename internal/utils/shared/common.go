@@ -81,6 +81,11 @@ func NewTitleExtractor() *TitleExtractor {
 	return &TitleExtractor{}
 }
 
+// ExtractTitle 从HTML内容中提取标题（便捷函数）
+func ExtractTitle(body string) string {
+	return NewTitleExtractor().ExtractTitle(body)
+}
+
 // ExtractTitle 从HTML内容中提取标题（修复：添加严格边界检查）
 func (e *TitleExtractor) ExtractTitle(body string) string {
 	if body == "" {
@@ -127,6 +132,15 @@ func (e *TitleExtractor) CleanTitle(title string) string {
 	title = strings.ReplaceAll(title, "&nbsp;", " ")
 	title = strings.ReplaceAll(title, "&#39;", "'")
 	title = strings.ReplaceAll(title, "&#34;", "\"")
+	title = strings.ReplaceAll(title, "&copy;", "©")
+	title = strings.ReplaceAll(title, "&reg;", "®")
+	title = strings.ReplaceAll(title, "&trade;", "™")
+
+	// 处理数字实体 &#数字;
+	numericEntityRegex := regexp.MustCompile(`&#(\d+);`)
+	title = numericEntityRegex.ReplaceAllStringFunc(title, func(match string) string {
+		return match // 暂时保持原样，避免复杂解析，后续可引入 html/entity 包
+	})
 
 	// 清理多余空白字符
 	title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")

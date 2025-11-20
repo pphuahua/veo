@@ -1,10 +1,10 @@
 package fingerprint
 
 import (
-	"veo/internal/core/logger"
 	"io"
 	"regexp"
 	"strings"
+	"veo/internal/core/logger"
 
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -146,55 +146,8 @@ func (ed *EncodingDetector) convertFromBig5(big5Str string) string {
 	return big5Str
 }
 
-// ===========================================
-// HTML实体解码
-// ===========================================
-
-// HTMLEntityDecoder HTML实体解码器
-type HTMLEntityDecoder struct{}
-
-// NewHTMLEntityDecoder 创建HTML实体解码器
-func NewHTMLEntityDecoder() *HTMLEntityDecoder {
-	return &HTMLEntityDecoder{}
-}
-
-// DecodeHTMLEntities 解码HTML实体
-func (hed *HTMLEntityDecoder) DecodeHTMLEntities(text string) string {
-	// 常见HTML实体解码
-	replacements := map[string]string{
-		"&lt;":    "<",
-		"&gt;":    ">",
-		"&amp;":   "&",
-		"&quot;":  "\"",
-		"&#39;":   "'",
-		"&nbsp;":  " ",
-		"&copy;":  "©",
-		"&reg;":   "®",
-		"&trade;": "™",
-	}
-
-	result := text
-	for entity, replacement := range replacements {
-		result = strings.ReplaceAll(result, entity, replacement)
-	}
-
-	// 处理数字实体 &#数字;
-	numericEntityRegex := regexp.MustCompile(`&#(\d+);`)
-	result = numericEntityRegex.ReplaceAllStringFunc(result, func(match string) string {
-		// 简单处理常见的数字实体
-		return match // 暂时保持原样，避免复杂解析
-	})
-
-	return result
-}
-
-// ===========================================
-// 全局实例（单例模式）
-// ===========================================
-
 var (
-	globalEncodingDetector  *EncodingDetector
-	globalHTMLEntityDecoder *HTMLEntityDecoder
+	globalEncodingDetector *EncodingDetector
 )
 
 // GetEncodingDetector 获取全局编码检测器实例
@@ -203,12 +156,4 @@ func GetEncodingDetector() *EncodingDetector {
 		globalEncodingDetector = NewEncodingDetector()
 	}
 	return globalEncodingDetector
-}
-
-// GetHTMLEntityDecoder 获取全局HTML实体解码器实例
-func GetHTMLEntityDecoder() *HTMLEntityDecoder {
-	if globalHTMLEntityDecoder == nil {
-		globalHTMLEntityDecoder = NewHTMLEntityDecoder()
-	}
-	return globalHTMLEntityDecoder
 }

@@ -1,17 +1,9 @@
 package portscan
 
-// OpenPortResult 表示一个开放端口结果
-// 参数说明：
-//   - IP: 目标IP地址
-//   - Port: 端口号
-//   - Proto: 协议（tcp/udp），若不可用可为空
-//
-// 返回：无
-type OpenPortResult struct {
-	IP      string `json:"ip"`
-	Port    int    `json:"port"`
-	Service string `json:"service,omitempty"`
-}
+import "veo/pkg/types"
+
+// OpenPortResult is now an alias to types.OpenPortResult
+type OpenPortResult = types.OpenPortResult
 
 // Options 端口扫描选项
 // 参数说明：

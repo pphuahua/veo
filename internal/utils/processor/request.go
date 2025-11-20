@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -12,10 +13,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"veo/internal/core/config"
+
 	"veo/internal/core/interfaces"
 	"veo/internal/core/useragent"
 	"veo/internal/utils/auth"
+	"veo/internal/utils/httpclient"
+	"veo/internal/utils/redirect"
 	"veo/internal/utils/shared"
 	"veo/proxy"
 
@@ -44,6 +47,32 @@ type RequestConfig struct {
 	KeepAlive       time.Duration // 保持连接时间
 	RandomUserAgent bool          // 是否随机使用UserAgent
 	Delay           time.Duration // 请求延迟时间
+}
+
+// followClientRedirect 检测并跟随客户端重定向（meta refresh / JS），返回新的响应。
+func (rp *RequestProcessor) followClientRedirect(response *interfaces.HTTPResponse) *interfaces.HTTPResponse {
+	if rp.redirectClient == nil || response == nil {
+		return nil
+	}
+
+	redirected, err := redirect.FollowClientRedirect(response, rp.redirectClient)
+	if err != nil {
+		logger.Debugf("客户端重定向失败: %v", err)
+		return nil
+	}
+	if redirected == nil {
+		return nil
+	}
+
+	// 继承部分元数据，便于后续处理
+	redirected.RequestHeaders = response.RequestHeaders
+	redirected.ResponseHeaders = response.ResponseHeaders
+	redirected.Server = response.Server
+	redirected.Duration = response.Duration
+	redirected.Depth = response.Depth
+
+	logger.Debugf("客户端重定向成功: %s -> %s", response.URL, redirected.URL)
+	return redirected
 }
 
 // ProcessingStats 处理统计信息 (原progress.go内容)
@@ -114,8 +143,9 @@ type RequestProcessor struct {
 	batchMode      bool                   // 批量扫描模式标志
 
 	// 新增：HTTP认证头部管理
-	customHeaders map[string]string  // CLI指定的自定义头部
-	authDetector  *auth.AuthDetector // 认证检测器
+	customHeaders  map[string]string  // CLI指定的自定义头部
+	authDetector   *auth.AuthDetector // 认证检测器
+	redirectClient httpclient.HTTPClientInterface
 }
 
 // ===========================================
@@ -135,8 +165,9 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		titleExtractor: shared.NewTitleExtractor(),
 
 		// 新增：初始化认证头部管理
-		customHeaders: make(map[string]string),
-		authDetector:  auth.NewAuthDetector(),
+		customHeaders:  make(map[string]string),
+		authDetector:   auth.NewAuthDetector(),
+		redirectClient: httpclient.New(nil),
 	}
 
 	return processor
@@ -424,6 +455,15 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 				// 继续外层重试循环，但不递增 attempt（认为是同一次尝试的跳转）
 				attempt--
 				continue
+			}
+			// 处理客户端重定向（meta refresh / JS），最多跟随3次
+			// 确保在目录扫描与指纹识别之前，完全做到跟随跳转，在最终页面进行处理
+			for i := 0; i < 3; i++ {
+				if redirected := rp.followClientRedirect(response); redirected != nil {
+					response = redirected
+				} else {
+					break
+				}
 			}
 			return response
 		}
@@ -768,8 +808,35 @@ func (rp *RequestProcessor) processResponseBody(rawBody []byte) string {
 
 // processResponse 处理fasthttp响应，构建HTTPResponse结构体
 func (rp *RequestProcessor) processResponse(url string, resp *fasthttp.Response, requestHeaders map[string][]string, startTime time.Time) (*interfaces.HTTPResponse, error) {
+	// 尝试解压响应体（如果启用了压缩且服务器返回了压缩数据）
+	// fasthttp.Response.Body() 返回原始内容，如果Content-Encoding是gzip，则需要手动解压
+	// 这对于后续的正则匹配（如重定向检测）至关重要
+	var rawBody []byte
+	contentEncoding := resp.Header.Peek("Content-Encoding")
+
+	if bytes.EqualFold(contentEncoding, []byte("gzip")) {
+		var err error
+		rawBody, err = resp.BodyGunzip()
+		if err != nil {
+			logger.Debugf("Gzip解压失败: %s, 错误: %v, 使用原始Body", url, err)
+			rawBody = resp.Body()
+		} else {
+			// 解压成功，为了避免后续重复解压，清除Content-Encoding头部（可选，取决于后续流程）
+			// resp.Header.Del("Content-Encoding")
+		}
+	} else if bytes.EqualFold(contentEncoding, []byte("deflate")) {
+		var err error
+		rawBody, err = resp.BodyInflate()
+		if err != nil {
+			logger.Debugf("Deflate解压失败: %s, 错误: %v, 使用原始Body", url, err)
+			rawBody = resp.Body()
+		}
+	} else {
+		rawBody = resp.Body()
+	}
+
 	// 提取响应基本信息
-	body := rp.processResponseBody(resp.Body())
+	body := rp.processResponseBody(rawBody)
 	title := rp.extractTitleSafely(url, body)
 	contentLength := rp.getContentLength(resp, body)
 	contentType := rp.getContentType(resp)
@@ -1254,31 +1321,17 @@ func (rp *RequestProcessor) isRedirectError(err error) bool {
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *RequestConfig {
-	cfg := config.GetRequestConfig()
-
 	// [修复] 优先使用配置文件值，提供合理的默认值作为后备
-	timeout := time.Duration(cfg.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 10 * time.Second // 默认超时时间
-	}
+	timeout := 10 * time.Second // 默认超时时间
 
-	retries := cfg.Retry
-	if retries <= 0 {
-		retries = 3 // 默认重试次数
-	}
+	retries := 3 // 默认重试次数
 
-	maxConcurrent := cfg.Threads
-	if maxConcurrent <= 0 {
-		maxConcurrent = 50 // 默认并发数
-	}
+	maxConcurrent := 50 // 默认并发数
 
 	connectTimeout := 5 * time.Second // 默认连接超时时间
 	maxRedirects := 5
 
 	randomUserAgent := true
-	if cfg.RandomUA != nil {
-		randomUserAgent = *cfg.RandomUA
-	}
 
 	delay := time.Duration(0) // 移除延迟配置，统一为0
 

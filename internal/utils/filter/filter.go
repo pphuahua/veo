@@ -16,12 +16,10 @@ import (
 
 // FilterConfig 过滤器配置（独立配置，不依赖外部config包）
 type FilterConfig struct {
-	ValidStatusCodes        []int // 有效状态码列表
-	InvalidPageThreshold    int   // 无效页面阈值（主要筛选）
-	SecondaryThreshold      int   // 二次筛选阈值
-	EnableStatusFilter      bool  // 是否启用状态码过滤
-	EnableInvalidPageFilter bool  // 是否启用无效页面过滤
-	EnableSecondaryFilter   bool  // 是否启用二次筛选
+	ValidStatusCodes     []int // 有效状态码列表
+	InvalidPageThreshold int   // 无效页面阈值（主要筛选）
+	SecondaryThreshold   int   // 二次筛选阈值
+	EnableStatusFilter   bool  // 是否启用状态码过滤
 
 	// Content-Type过滤相关配置
 	EnableContentTypeFilter bool     // 是否启用Content-Type过滤
@@ -34,12 +32,10 @@ type FilterConfig struct {
 // DefaultFilterConfig 获取默认过滤器配置
 func DefaultFilterConfig() *FilterConfig {
 	return &FilterConfig{
-		ValidStatusCodes:        []int{200, 403, 500, 302, 301, 405},
-		InvalidPageThreshold:    3,
-		SecondaryThreshold:      1,
-		EnableStatusFilter:      true,
-		EnableInvalidPageFilter: true,
-		EnableSecondaryFilter:   true,
+		ValidStatusCodes:     []int{200, 403, 500, 302, 301, 405},
+		InvalidPageThreshold: 3,
+		SecondaryThreshold:   1,
+		EnableStatusFilter:   true,
 
 		// Content-Type过滤默认配置
 		EnableContentTypeFilter: true,
@@ -196,7 +192,7 @@ func (rf *ResponseFilter) FilterResponses(responses []interfaces.HTTPResponse) *
 	}
 
 	// 步骤3: 主要无效页面过滤
-	if config.EnableInvalidPageFilter && rf.hashFilter != nil {
+	if rf.hashFilter != nil {
 		currentResponses = rf.hashFilter.Filter(currentResponses)
 		result.PrimaryFilteredPages = currentResponses
 		result.PrimaryFiltered = len(currentResponses)
@@ -206,7 +202,7 @@ func (rf *ResponseFilter) FilterResponses(responses []interfaces.HTTPResponse) *
 	}
 
 	// 步骤4: 二次筛选
-	if config.EnableSecondaryFilter && rf.secondaryFilter != nil {
+	if rf.secondaryFilter != nil {
 		currentResponses = rf.secondaryFilter.Filter(currentResponses)
 		result.ValidPages = currentResponses
 		result.SecondaryFiltered = len(currentResponses)
@@ -234,10 +230,10 @@ func (rf *ResponseFilter) rebuildFilterChain() {
 	if rf.config.EnableStatusFilter && rf.statusCodeFilter != nil {
 		rf.filterChain.AddStrategy(rf.statusCodeFilter)
 	}
-	if rf.config.EnableInvalidPageFilter && rf.hashFilter != nil {
+	if rf.hashFilter != nil {
 		rf.filterChain.AddStrategy(rf.hashFilter)
 	}
-	if rf.config.EnableSecondaryFilter && rf.secondaryFilter != nil {
+	if rf.secondaryFilter != nil {
 		rf.filterChain.AddStrategy(rf.secondaryFilter)
 	}
 }
@@ -273,12 +269,10 @@ func (rf *ResponseFilter) GetConfig() *FilterConfig {
 
 	// 返回配置副本
 	return &FilterConfig{
-		ValidStatusCodes:        rf.config.ValidStatusCodes,
-		InvalidPageThreshold:    rf.config.InvalidPageThreshold,
-		SecondaryThreshold:      rf.config.SecondaryThreshold,
-		EnableStatusFilter:      rf.config.EnableStatusFilter,
-		EnableInvalidPageFilter: rf.config.EnableInvalidPageFilter,
-		EnableSecondaryFilter:   rf.config.EnableSecondaryFilter,
+		ValidStatusCodes:     rf.config.ValidStatusCodes,
+		InvalidPageThreshold: rf.config.InvalidPageThreshold,
+		SecondaryThreshold:   rf.config.SecondaryThreshold,
+		EnableStatusFilter:   rf.config.EnableStatusFilter,
 	}
 }
 
@@ -731,7 +725,7 @@ func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResp
 	if field := newRespElem.FieldByName("StatusCode"); field.IsValid() && field.CanSet() {
 		field.SetInt(int64(resp.StatusCode))
 	}
-	if field := newRespElem.FieldByName("Headers"); field.IsValid() && field.CanSet() {
+	if field := newRespElem.FieldByName("ResponseHeaders"); field.IsValid() && field.CanSet() {
 		field.Set(reflect.ValueOf(resp.ResponseHeaders))
 	}
 	if field := newRespElem.FieldByName("Body"); field.IsValid() && field.CanSet() {
@@ -791,11 +785,11 @@ func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value,
 		if field := item.FieldByName("Timestamp"); field.IsValid() {
 			switch field.Kind() {
 			case reflect.Int, reflect.Int64, reflect.Int32:
-				match.Timestamp = field.Int()
+				match.Timestamp = time.Unix(field.Int(), 0)
 			case reflect.Struct:
 				if field.Type().String() == "time.Time" {
 					if t, ok := field.Interface().(time.Time); ok {
-						match.Timestamp = t.Unix()
+						match.Timestamp = t
 					}
 				}
 			}

@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
-	portscanpkg "veo/internal/modules/portscan"
+	"veo/internal/core/types"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -61,7 +62,7 @@ func GenerateExcelReport(filterResult *interfaces.FilterResult, reportType Excel
 
 // GenerateExcelReportWithPorts 生成包含端口扫描结果的 Excel 报告（合并表格）
 // 对于端口结果，将 "IP:Port" 写入 URL 列，其他列留空
-func GenerateExcelReportWithPorts(filterResult *interfaces.FilterResult, reportType ExcelReportType, ports []portscanpkg.OpenPortResult, outputPath string) (string, error) {
+func GenerateExcelReportWithPorts(filterResult *interfaces.FilterResult, reportType ExcelReportType, ports []types.OpenPortResult, outputPath string) (string, error) {
 	if filterResult == nil {
 		return "", fmt.Errorf("过滤结果为空")
 	}

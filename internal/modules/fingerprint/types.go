@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"veo/internal/core/types"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,27 +31,10 @@ type FingerprintRule struct {
 }
 
 // FingerprintMatch 指纹匹配结果
-type FingerprintMatch struct {
-	URL        string    `json:"url"`               // 匹配的URL
-	RuleName   string    `json:"rule_name"`         // 匹配的规则名称
-	Technology string    `json:"technology"`        // 识别的技术栈
-	DSLMatched string    `json:"dsl_matched"`       // 匹配的DSL表达式
-	Timestamp  time.Time `json:"timestamp"`         // 匹配时间
-	Snippet    string    `json:"snippet,omitempty"` // 匹配内容片段
-}
+type FingerprintMatch = types.FingerprintMatch
 
-// HTTPResponse 响应数据结构（简化版，独立于其他模块）
-type HTTPResponse struct {
-	URL           string              `json:"url"`
-	Method        string              `json:"method"`
-	StatusCode    int                 `json:"status_code"`
-	Headers       map[string][]string `json:"headers"`
-	Body          string              `json:"body"`
-	ContentType   string              `json:"content_type"`
-	ContentLength int64               `json:"content_length"`
-	Server        string              `json:"server"`
-	Title         string              `json:"title"`
-}
+// HTTPResponse 响应数据结构
+type HTTPResponse = types.HTTPResponse
 
 // EngineConfig 引擎配置（优化版，移除未使用字段）
 type EngineConfig struct {

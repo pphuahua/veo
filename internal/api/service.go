@@ -29,6 +29,7 @@ import (
 	"veo/internal/utils/filter"
 	"veo/internal/utils/httpclient"
 	requests "veo/internal/utils/processor"
+	sharedutils "veo/internal/utils/shared"
 )
 
 type DirscanPage struct {
@@ -419,33 +420,6 @@ func groupResponsesByURL(responses []*interfaces.HTTPResponse) map[string][]*int
 	return group
 }
 
-var (
-	titleRegex        = regexp.MustCompile(`(?i)<title[^>]*?>(.*?)</title>`)
-	entityDecoderOnce sync.Once
-	entityDecoder     *fingerprintinternal.HTMLEntityDecoder
-)
-
-func extractTitleFromHTML(body string) string {
-	if body == "" {
-		return ""
-	}
-	matches := titleRegex.FindStringSubmatch(body)
-	if len(matches) > 1 {
-		title := strings.TrimSpace(matches[1])
-		title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
-		if title != "" {
-			entityDecoderOnce.Do(func() {
-				entityDecoder = fingerprintinternal.GetHTMLEntityDecoder()
-			})
-			if entityDecoder != nil {
-				title = entityDecoder.DecodeHTMLEntities(title)
-			}
-		}
-		return title
-	}
-	return ""
-}
-
 func selectFullResponse(page interfaces.HTTPResponse, fullMap map[string][]*interfaces.HTTPResponse) *interfaces.HTTPResponse {
 	if fullMap != nil {
 		if candidates, ok := fullMap[page.URL]; ok {
@@ -640,7 +614,7 @@ func runFingerprintPathProbing(engine *fingerprintinternal.Engine, processor *re
 					ContentType:   "",
 					ContentLength: int64(len(body)),
 					Server:        "",
-					Title:         extractTitleFromHTML(body),
+					Title:         sharedutils.ExtractTitle(body),
 				}
 
 				match := engine.MatchSpecificRule(rule, resp, httpClient, baseURL)
@@ -701,7 +675,7 @@ func runFingerprint404Probing(engine *fingerprintinternal.Engine, processor *req
 			ContentType:   "text/html",
 			ContentLength: int64(len(body)),
 			Server:        "",
-			Title:         extractTitleFromHTML(body),
+			Title:         sharedutils.ExtractTitle(body),
 		}
 
 		rawMatches := engine.AnalyzeResponseWithClientSilent(resp, httpClient)

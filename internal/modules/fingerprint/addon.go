@@ -21,11 +21,10 @@ type FingerprintAddon struct {
 	proxy.BaseAddon
 	engine           *Engine
 	enabled          bool
-	httpClient       interface{}        // HTTP客户端（用于主动探测）
-	probedHosts      map[string]bool    // 已探测的主机缓存
-	probedMutex      sync.RWMutex       // 缓存锁
-	encodingDetector *EncodingDetector  // 编码检测器
-	entityDecoder    *HTMLEntityDecoder // HTML实体解码器
+	httpClient       interface{}       // HTTP客户端（用于主动探测）
+	probedHosts      map[string]bool   // 已探测的主机缓存
+	probedMutex      sync.RWMutex      // 缓存锁
+	encodingDetector *EncodingDetector // 编码检测器
 }
 
 // NewFingerprintAddon 创建指纹识别插件
@@ -41,10 +40,9 @@ func NewFingerprintAddon(engineConfig *EngineConfig) (*FingerprintAddon, error) 
 	addon := &FingerprintAddon{
 		engine:           engine,
 		enabled:          true,
-		httpClient:       nil,                    // HTTP客户端需要后续设置
-		probedHosts:      make(map[string]bool),  // 初始化探测缓存
-		encodingDetector: GetEncodingDetector(),  // 初始化编码检测器
-		entityDecoder:    GetHTMLEntityDecoder(), // 初始化HTML实体解码器
+		httpClient:       nil,                   // HTTP客户端需要后续设置
+		probedHosts:      make(map[string]bool), // 初始化探测缓存
+		encodingDetector: GetEncodingDetector(), // 初始化编码检测器
 	}
 
 	return addon, nil
@@ -179,15 +177,15 @@ func (fa *FingerprintAddon) convertToHTTPResponse(f *proxy.Flow) *HTTPResponse {
 	contentType := f.Response.Header.Get("Content-Type")
 
 	return &HTTPResponse{
-		URL:           f.Request.URL.String(),
-		Method:        f.Request.Method,
-		StatusCode:    f.Response.StatusCode,
-		Headers:       headers,
-		Body:          body,
-		ContentType:   contentType,
-		ContentLength: int64(len(body)),
-		Server:        server,
-		Title:         title,
+		URL:             f.Request.URL.String(),
+		Method:          f.Request.Method,
+		StatusCode:      f.Response.StatusCode,
+		ResponseHeaders: headers,
+		Body:            body,
+		ContentType:     contentType,
+		ContentLength:   int64(len(body)),
+		Server:          server,
+		Title:           title,
 	}
 }
 
@@ -337,14 +335,7 @@ func (fa *FingerprintAddon) markHostAsProbed(hostKey string) {
 func (fa *FingerprintAddon) extractTitleFromHTML(body string) string {
 	// 使用共享的标题提取器
 	extractor := shared.NewTitleExtractor()
-	title := extractor.ExtractTitle(body)
-
-	// 指纹识别模块需要额外的HTML实体解码
-	if title != "" && title != "无标题" && title != "空标题" {
-		title = fa.entityDecoder.DecodeHTMLEntities(title)
-	}
-
-	return title
+	return extractor.ExtractTitle(body)
 }
 
 // ===========================================

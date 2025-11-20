@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
 	"veo/internal/core/logger"
-	"veo/internal/modules/portscan"
+	"veo/internal/core/types"
 
 	"github.com/xuri/excelize/v2"
 )
 
 // GeneratePortscanExcel 生成端口扫描 Excel 报告
 // 输出列：IP, Port
-func GeneratePortscanExcel(results []portscan.OpenPortResult, outputPath string) (string, error) {
+func GeneratePortscanExcel(results []types.OpenPortResult, outputPath string) (string, error) {
 	f := excelize.NewFile()
 	sheet := "PortScan"
 	f.SetSheetName(f.GetSheetName(0), sheet)
