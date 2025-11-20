@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	portscanpkg "veo/internal/modules/portscan"
+	portscanpkg "veo/pkg/portscan"
 )
 
 // SetupRouter 初始化Gin路由

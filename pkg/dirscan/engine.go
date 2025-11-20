@@ -10,7 +10,7 @@ import (
 
 	"veo/internal/core/interfaces"
 	"veo/internal/core/logger"
-	report "veo/internal/modules/reporter"
+	report "veo/pkg/reporter"
 	"veo/internal/utils/filter"
 	"veo/internal/utils/generator"
 	requests "veo/internal/utils/processor"

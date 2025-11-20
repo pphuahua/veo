@@ -3,7 +3,7 @@ package console
 import (
 	"runtime"
 	"veo/internal/core/logger"
-	"veo/internal/modules/fingerprint"
+	"veo/pkg/fingerprint"
 	collector "veo/internal/utils/collector"
 )
 

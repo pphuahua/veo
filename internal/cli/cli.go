@@ -21,9 +21,9 @@ import (
 	"veo/internal/core/logger"
 	modulepkg "veo/internal/core/module"
 	portconfig "veo/internal/core/ports"
-	"veo/internal/modules/authlearning"
-	"veo/internal/modules/dirscan"
-	fpaddon "veo/internal/modules/fingerprint"
+	"veo/pkg/authlearning"
+	"veo/pkg/dirscan"
+	fpaddon "veo/pkg/fingerprint"
 	"veo/internal/utils/collector"
 	"veo/internal/utils/dictionary"
 	"veo/internal/utils/filter"
@@ -32,10 +32,10 @@ import (
 	"veo/proxy"
 
 	// "os/exec" // removed: masscan执行迁移至模块
-	portscanpkg "veo/internal/modules/portscan"
-	masscanrunner "veo/internal/modules/portscan/masscan"
-	portservice "veo/internal/modules/portscan/service/fingerprint"
-	report "veo/internal/modules/reporter"
+	portscanpkg "veo/pkg/portscan"
+	masscanrunner "veo/pkg/portscan/masscan"
+	portservice "veo/pkg/portscan/service"
+	report "veo/pkg/reporter"
 	// neturl "net/url" // not used after logic change
 )
 

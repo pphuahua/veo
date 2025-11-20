@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 	"veo/internal/core/logger"
-	"veo/internal/modules/portscan"
+	"veo/pkg/portscan"
 )
 
 // masscanJSONRecord 对应 -oJ 的单行JSON结构

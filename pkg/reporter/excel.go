@@ -200,4 +200,36 @@ func sanitizeSnippet(snippet string) string {
 	return snippet
 }
 
-// Optional helper to include timestamp or metadata if needed.
+// GeneratePortscanExcel 生成端口扫描 Excel 报告
+// 输出列：IP, Port
+func GeneratePortscanExcel(results []types.OpenPortResult, outputPath string) (string, error) {
+	f := excelize.NewFile()
+	sheet := "PortScan"
+	f.SetSheetName(f.GetSheetName(0), sheet)
+
+	headers := []string{"IP", "Port", "Service"}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheet, cell, h)
+	}
+
+	for idx, r := range results {
+		ipCell, _ := excelize.CoordinatesToCellName(1, idx+2)
+		portCell, _ := excelize.CoordinatesToCellName(2, idx+2)
+		serviceCell, _ := excelize.CoordinatesToCellName(3, idx+2)
+		f.SetCellValue(sheet, ipCell, r.IP)
+		f.SetCellValue(sheet, portCell, r.Port)
+		if r.Service != "" {
+			f.SetCellValue(sheet, serviceCell, r.Service)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return "", fmt.Errorf("创建输出目录失败: %w", err)
+	}
+	if err := f.SaveAs(outputPath); err != nil {
+		return "", fmt.Errorf("保存 Excel 失败: %w", err)
+	}
+	logger.Debugf("Excel报告已生成: %s", outputPath)
+	return outputPath, nil
+}
